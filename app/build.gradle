@@ -1,5 +1,7 @@
-apply plugin: 'com.android.application'
-apply plugin: 'com.chaquo.python'
+plugins {
+    id 'com.android.application'
+    id 'com.chaquo.python'
+}
 
 android {
     namespace 'com.palm.harvest'
@@ -20,6 +22,7 @@ android {
         }
     }
 }
+
 dependencies {
     implementation "androidx.appcompat:appcompat:1.6.1"
     implementation "com.google.android.material:material:1.9.0"
