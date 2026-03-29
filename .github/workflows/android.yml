@@ -18,14 +18,24 @@ jobs:
           mkdir temp_wrap
           cd temp_wrap
           touch settings.gradle
+          # Generate the 8.4 wrapper in the sandbox
           gradle wrapper --gradle-version 8.4
           cd ..
+          
+          # FIX: Delete existing wrapper files/folders to prevent "Directory not empty" error
+          rm -rf gradle gradlew gradlew.bat
+          
+          # Move new wrapper files to root
           mv temp_wrap/gradle .
           mv temp_wrap/gradlew .
           mv temp_wrap/gradlew.bat .
+          
+          # Ensure execution permission
+          chmod +x gradlew
           rm -rf temp_wrap
 
       - name: Build Debug APK
+        # Use the newly generated wrapper
         run: ./gradlew assembleDebug
 
       - name: Upload APK
