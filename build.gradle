@@ -5,7 +5,6 @@ buildscript {
         maven { url "https://chaquo.com/maven" }
     }
     dependencies {
-        // Using highly stable versions
         classpath "com.android.tools.build:gradle:8.0.2"
         classpath "com.chaquo.python:gradle:15.0.1"
     }
@@ -17,8 +16,4 @@ allprojects {
         mavenCentral()
         maven { url "https://chaquo.com/maven" }
     }
-}
-
-task clean(type: Delete) {
-    delete rootProject.buildDir
 }

@@ -1,5 +1,7 @@
-apply plugin: 'com.android.application'
-apply plugin: 'com.chaquo.python'
+plugins {
+    id 'com.android.application'
+    id 'com.chaquo.python'
+}
 
 android {
     namespace 'com.palm.harvest'
@@ -22,12 +24,6 @@ android {
                 install "rns"
                 install "lxmf"
             }
-        }
-    }
-
-    buildTypes {
-        release {
-            minifyEnabled false
         }
     }
 }
