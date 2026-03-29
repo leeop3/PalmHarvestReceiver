@@ -3,20 +3,31 @@ apply plugin: 'com.chaquo.python'
 
 android {
     namespace 'com.palm.harvest'
-    compileSdk 34
+    compileSdk 33
+    
     defaultConfig {
         applicationId "com.palm.harvest"
         minSdk 24
-        targetSdk 34
+        targetSdk 33
         versionCode 1
         versionName "1.0"
-        ndk { abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64" }
+
+        ndk {
+            abiFilters "armeabi-v7a", "arm64-v8a"
+        }
+
         python {
-            buildPython "python3"
+            version "3.10"
             pip {
                 install "rns"
                 install "lxmf"
             }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
         }
     }
 }
