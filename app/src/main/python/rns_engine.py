@@ -1,14 +1,28 @@
+import sys
+from types import ModuleType
+
+# --- ANDROID MOCK FIX ---
+# Reticulum looks for these on Android. We mock them to bypass the USB check 
+# since we are using a TCP bridge for Bluetooth.
+mock_usb = ModuleType("usbserial4a")
+mock_usb.serial4a = ModuleType("serial4a")
+mock_usb.get_ports_list = lambda: []
+sys.modules["usbserial4a"] = mock_usb
+
+mock_jnius = ModuleType("jnius")
+mock_jnius.autoclass = lambda x: None
+sys.modules["jnius"] = mock_jnius
+
 import signal
 signal.signal = lambda sig, handler: None
 import RNS, LXMF, os, csv, io
 from LXMF import LXMRouter
 
-def start_engine(service_obj, storage_path, radio_params):
+def start_engine(service_obj, storage_path, radio_params_java):
+    radio_params = dict(radio_params_java)
     rns_dir = os.path.join(storage_path, ".reticulum")
     if not os.path.exists(rns_dir): os.makedirs(rns_dir)
     
-    # FIX: Access Java Map using 1-argument .get() and Python 'or' for defaults
-    # Java .get() returns None if the key is missing
     freq = radio_params.get("freq") or 915000000
     bw   = radio_params.get("bw")   or 125000
     tx   = radio_params.get("tx")   or 20
@@ -37,6 +51,7 @@ share_instance = Yes
         f.write(config)
 
     try:
+        # Initialize Reticulum
         RNS.Reticulum(configdir=rns_dir)
         
         id_path = os.path.join(storage_path, "storage_identity")
