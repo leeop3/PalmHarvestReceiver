@@ -42,14 +42,12 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
     kotlin_cb = service_obj
     rns_dir = os.path.join(storage_path, ".reticulum")
     if not os.path.exists(rns_dir): os.makedirs(rns_dir)
-    
-    # CRITICAL: WIPE old config to stop the "[Errno 2] TCP" error loop
     with open(os.path.join(rns_dir, "config"), "w") as f:
         f.write("[reticulum]\nenable_transport = True\n\n[interfaces]\n")
 
     try:
-        # Start RNS with Debug Logging for ADB
-        RNS.Reticulum(configdir=rns_dir, loglevel=RNS.LOG_DEBUG)
+        # LOG_EXTREME ensures we see every byte moving
+        RNS.Reticulum(configdir=rns_dir, loglevel=RNS.LOG_EXTREME)
         
         id_path = os.path.join(storage_path, "storage_identity")
         local_id = RNS.Identity.from_file(id_path) if os.path.exists(id_path) else RNS.Identity()
@@ -66,13 +64,13 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
 def inject_rnode(radio_params_json):
     try:
         params = json.loads(radio_params_json)
-        print("RNS-LOG: Attempting to inject RNode via TCP 127.0.0.1:8001")
+        print("RNS-LOG: Step 1 - Preparing Config")
         
         ictx = {
             "name": "RNode-Bridge",
             "type": "RNodeInterface",
             "enabled": True,
-            "port": None,            # Trigger TCP mode in driver
+            "port": None,            
             "tcp_host": "127.0.0.1",
             "tcp_port": 8001,
             "frequency": int(params.get("freq")),
@@ -83,14 +81,20 @@ def inject_rnode(radio_params_json):
             "flow_control": False
         }
         
-        # Instantiate and add to transport
+        print("RNS-LOG: Step 2 - Creating Interface Object")
+        # Instantiate. This is where it usually hangs waiting for RNode version response.
         ifac = RNodeInterface(RNS.Transport, ictx)
+        
+        print("RNS-LOG: Step 3 - Registering Interface")
         ifac.mode = Interface.MODE_FULL
         RNS.Transport.interfaces.append(ifac)
         
+        print("RNS-LOG: Step 4 - Triggering Announce")
         if local_destination: local_destination.announce()
-        return "Hardware Handshake Sent"
+        
+        return "RNode Injected Successfully"
     except Exception as e:
+        print(f"RNS-LOG: Step 5 - FAILED: {str(e)}")
         return f"Injection Error: {str(e)}"
 
 def on_lxmf(lxm):
