@@ -17,8 +17,8 @@ import com.palm.harvest.data.HarvestReport
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.io.IOException
+import java.net.InetSocketAddress
 import java.net.ServerSocket
-import java.net.Socket
 import java.util.*
 import androidx.room.Room
 import org.json.JSONObject
@@ -27,7 +27,7 @@ class RNSReceiverService : Service() {
     private val binder = LocalBinder()
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var btSocket: BluetoothSocket? = null
-    private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+    private var tcpServer: ServerSocket? = null
     private lateinit var db: AppDatabase
 
     companion object {
@@ -50,69 +50,66 @@ class RNSReceiverService : Service() {
             } else {
                 @Suppress("DEPRECATION") intent.getParcelableExtra(EXTRA_DEVICE)
             }
-            device?.let { connectToRNode(it) }
+            device?.let { startBridge(it) }
         }
         return START_STICKY
     }
 
-    private fun connectToRNode(device: BluetoothDevice) {
-        serviceScope.launch {
-            try {
-                btSocket = device.createRfcommSocketToServiceRecord(SPP_UUID)
-                btSocket?.connect()
-                onStatusUpdate("BT Connected. Starting Mesh...")
-                startTcpBridge()
-            } catch (e: IOException) {
-                onStatusUpdate("BT Error")
-            }
-        }
-    }
-
-    private fun startTcpBridge() {
+    private fun startBridge(device: BluetoothDevice) {
         serviceScope.launch(Dispatchers.IO) {
-            var serverSocket: ServerSocket? = null
             try {
-                serverSocket = ServerSocket(8001)
+                onStatusUpdate("Connecting BT...")
+                btSocket?.close()
+                tcpServer?.close()
                 
-                // CRITICAL: Delay injection slightly so the server is 100% ready to accept()
-                delay(1000)
+                // Use the 'Insecure' method from rnshello
+                val m = device.javaClass.getMethod("createInsecureRfcommSocket", Int::class.javaPrimitiveType)
+                btSocket = m.invoke(device, 1) as BluetoothSocket
+                btSocket?.connect()
+                
+                // Use Port 7633 from rnshello
+                tcpServer = ServerSocket()
+                tcpServer?.reuseAddress = true
+                tcpServer?.bind(InetSocketAddress("127.0.0.1", 7633))
+                
+                onStatusUpdate("Bridge 7633 Ready")
+                
+                // Trigger Python
                 injectPythonInterface()
 
-                val client = serverSocket.accept()
-                client.tcpNoDelay = true 
-                
+                val client = tcpServer?.accept() ?: return@launch
                 val btIn = btSocket!!.inputStream
                 val btOut = btSocket!!.outputStream
                 val tcpIn = client.inputStream
                 val tcpOut = client.outputStream
 
-                onStatusUpdate("LoRa Link Active")
-
-                // BT -> TCP
+                // Pipe BT -> TCP
                 launch {
-                    val buffer = ByteArray(2048)
-                    while (isActive) {
-                        val len = btIn.read(buffer)
-                        if (len > 0) {
-                            tcpOut.write(buffer, 0, len)
+                    val buf = ByteArray(1024)
+                    try {
+                        var r: Int
+                        while (isActive && btIn.read(buf).also { r = it } != -1) {
+                            tcpOut.write(buf, 0, r)
                             tcpOut.flush()
                         }
-                    }
+                    } catch (e: Exception) {}
                 }
 
-                // TCP -> BT
-                val buffer = ByteArray(2048)
-                while (isActive) {
-                    val len = tcpIn.read(buffer)
-                    if (len > 0) {
-                        btOut.write(buffer, 0, len)
-                        btOut.flush()
-                    }
+                // Pipe TCP -> BT
+                launch {
+                    val buf = ByteArray(1024)
+                    try {
+                        var r: Int
+                        while (isActive && tcpIn.read(buf).also { r = it } != -1) {
+                            btOut.write(buf, 0, r)
+                            btOut.flush()
+                        }
+                    } catch (e: Exception) {}
                 }
+
             } catch (e: Exception) {
-                onStatusUpdate("Bridge Lost")
-            } finally {
-                serverSocket?.close()
+                onStatusUpdate("Bridge Failed")
+                Log.e("PalmHarvest", "Bridge Error", e)
             }
         }
     }
@@ -159,11 +156,6 @@ class RNSReceiverService : Service() {
         }
     }
 
-    private fun updateNotification(content: String) {
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.notify(1, createNotification(content))
-    }
-
     private fun createNotification(content: String): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Palm Harvest Receiver")
@@ -171,6 +163,11 @@ class RNSReceiverService : Service() {
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setOngoing(true)
             .build()
+    }
+
+    private fun updateNotification(content: String) {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.notify(1, createNotification(content))
     }
 
     private fun createNotificationChannel() {

@@ -22,21 +22,15 @@ def mock_module(name):
 mock_module("usbserial4a"); mock_module("usb4a"); mock_module("jnius")
 sys.modules["usb4a.usb"] = sys.modules["usb4a"].usb
 
-# --- 2. IMPORT RNS & DISABLE ANDROID VALIDATION ---
 import RNS
 try:
     import RNS.vendor.platformutils as pu
     pu.is_android = lambda: False
 except: pass
 
-# Explicitly load pyserial socket handler
-try:
-    import serial.urlhandler.protocol_socket
-except:
-    pass
-
 from LXMF import LXMRouter
-from RNS.Interfaces.RNodeInterface import RNodeInterface
+# IMPORTANT: Import the Android-specific class if using the rnshello config style
+from RNS.Interfaces.Android.RNodeInterface import RNodeInterface
 from RNS.Interfaces.Interface import Interface
 
 signal.signal = lambda sig, handler: None
@@ -50,16 +44,13 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
     rns_dir = os.path.join(storage_path, ".reticulum")
     if not os.path.exists(rns_dir): os.makedirs(rns_dir)
     with open(os.path.join(rns_dir, "config"), "w") as f:
-        f.write("[reticulum]\nenable_transport = True\n\n[interfaces]\n")
+        f.write("[reticulum]\nenable_transport = True\nshare_instance = Yes\n\n[interfaces]\n")
 
     try:
-        # Extreme logging to help find the port issue
-        RNS.Reticulum(configdir=rns_dir, loglevel=RNS.LOG_DEBUG)
-        
+        RNS.Reticulum(configdir=rns_dir)
         id_path = os.path.join(storage_path, "storage_identity")
         local_id = RNS.Identity.from_file(id_path) if os.path.exists(id_path) else RNS.Identity()
         if not os.path.exists(id_path): local_id.to_file(id_path)
-        
         router = LXMRouter(identity=local_id, storagepath=os.path.join(storage_path, ".lxmf"))
         local_destination = router.register_delivery_identity(local_id, display_name="PalmReceiver")
         router.register_delivery_callback(on_lxmf)
@@ -70,17 +61,14 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
 def inject_rnode(radio_params_json):
     try:
         params = json.loads(radio_params_json)
-        
-        # Define the bridge URL
-        target_port = "socket://127.0.0.1:8001"
-        
-        # Define the configuration dictionary
-        # We use lowercase 'port' and a forced string type
+        # Using the EXACT dictionary structure from rnshello
         ictx = {
-            "name": "RNode-Bridge",
+            "name": "Android RNode Bridge",
             "type": "RNodeInterface",
-            "enabled": True,
-            "port": str(target_port),
+            "interface_enabled": True,
+            "outgoing": True,
+            "tcp_host": "127.0.0.1",
+            "tcp_port": 7633,
             "frequency": int(params.get("freq")),
             "bandwidth": int(params.get("bw")),
             "txpower": int(params.get("tx")),
@@ -89,23 +77,19 @@ def inject_rnode(radio_params_json):
             "flow_control": False
         }
         
-        print(f"RNS-LOG: Injecting RNode on {ictx['port']}")
+        # Instantiate directly from the class
+        new_ifac = RNodeInterface(RNS.Transport, ictx)
+        new_ifac.IN = True
+        new_ifac.OUT = True
         
-        # Instantiate the interface directly
-        ifac = RNodeInterface(RNS.Transport, ictx)
+        # Push into transport
+        RNS.Transport.interfaces.append(new_ifac)
         
-        # Manually set the mode and register it
-        ifac.mode = Interface.MODE_FULL
-        RNS.Transport.interfaces.append(ifac)
-        
+        time.sleep(1)
         if local_destination: local_destination.announce()
-        return "RNode Active"
+        return "RNode Hardware Handshake Successful"
     except Exception as e:
-        print(f"RNS-LOG: Injection Failed: {str(e)}")
-        # If it fails, let's see exactly what keys were in the dict
-        try: print(f"RNS-LOG: Keys present: {list(ictx.keys())}")
-        except: pass
-        return f"Link Error: {str(e)}"
+        return f"Link Failed: {str(e)}"
 
 def on_lxmf(lxm):
     try:
