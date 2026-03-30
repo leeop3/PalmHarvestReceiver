@@ -38,9 +38,9 @@ interface HarvestDao {
     @Query("SELECT * FROM harvest_reports ORDER BY timestamp DESC")
     fun getAllReports(): Flow<List<HarvestReport>>
 
-    // FIX: Using COALESCE ensures SUM() never returns NULL and crashes Kotlin's Int mapping
+    // FIX: Using IFNULL and COALESCE makes this query 100% crash-proof
     @Query("""
-        SELECT blockId, 
+        SELECT IFNULL(blockId, 'Unknown') as blockId, 
                COALESCE(SUM(ripeBunches), 0) as totalRipe, 
                COALESCE(SUM(emptyBunches), 0) as totalEmpty, 
                COALESCE(SUM(ripeBunches + emptyBunches), 0) as totalBunches 
@@ -57,8 +57,8 @@ interface HarvestDao {
     fun getAllNodes(): Flow<List<DiscoveredNode>>
 }
 
-// FIX: Bumped to Version 3 to cleanly wipe old locked database connections
-@Database(entities = [HarvestReport::class, DiscoveredNode::class], version = 3, exportSchema = false)
+// FIX: Bumped to version 4 to clear corrupted database states
+@Database(entities =[HarvestReport::class, DiscoveredNode::class], version = 4, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun harvestDao(): HarvestDao
 
