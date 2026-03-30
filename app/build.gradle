@@ -26,6 +26,17 @@ android {
         }
     }
 
+    # FIX: Set Java compatibility to 17
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    # FIX: Set Kotlin JVM target to 17
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
     packagingOptions {
         jniLibs {
             useLegacyPackaging = true
