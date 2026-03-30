@@ -4,7 +4,7 @@ import importlib.util, importlib.machinery
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-# --- THE HIJACKS ---
+# --- 1. THE HIJACKS ---
 platform.system = lambda: "Linux"
 def mock_module(name):
     if name not in sys.modules:
@@ -47,7 +47,7 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
 
     try:
         RNS.Reticulum(configdir=rns_dir, loglevel=RNS.LOG_DEBUG)
-        id_path = os.path.join(storage_path, "storage_identity")
+        id_path = os.path.join(rns_dir, "storage_identity")
         local_id = RNS.Identity.from_file(id_path) if os.path.exists(id_path) else RNS.Identity()
         if not os.path.exists(id_path): local_id.to_file(id_path)
         router = LXMRouter(identity=local_id, storagepath=os.path.join(storage_path, ".lxmf"))
@@ -60,15 +60,14 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
 def inject_rnode(radio_params_json):
     try:
         params = json.loads(radio_params_json)
-        # Give the bridge a moment to stabilize
-        time.sleep(1) 
         
-        # FIX: We use tcp_host and tcp_port instead of "port": "socket://..."
-        # This forces Reticulum to use its internal TCP logic instead of pyserial's file opener.
+        # We MUST provide "port" as a key to satisfy the RNodeInterface validator.
+        # But we provide tcp_host/tcp_port to actually establish the connection.
         ictx = {
             "name": "RNode-Bridge",
             "type": "RNodeInterface",
             "enabled": True,
+            "port": "TCP", # <--- DUMMY VALUE TO FIX "NO PORT SPECIFIED"
             "tcp_host": "127.0.0.1",
             "tcp_port": 8001,
             "frequency": int(params.get("freq")),
@@ -79,12 +78,13 @@ def inject_rnode(radio_params_json):
             "flow_control": False
         }
         
+        # Instantiate and manually register
         ifac = RNodeInterface(RNS.Transport, ictx)
         ifac.mode = Interface.MODE_FULL
         RNS.Transport.interfaces.append(ifac)
         
         if local_destination: local_destination.announce()
-        return f"TCP Link Est: {int(params.get('freq'))/1000000} MHz"
+        return f"TCP Bridge Est: {int(params.get('freq'))/1000000} MHz"
     except Exception as e:
         return f"TCP Link Error: {str(e)}"
 
