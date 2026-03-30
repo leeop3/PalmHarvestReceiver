@@ -1,7 +1,8 @@
 package com.palm.harvest.data
+
 import android.content.Context
+import androidx.lifecycle.LiveData
 import androidx.room.*
-import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName = "harvest_reports")
 data class HarvestReport(
@@ -35,10 +36,10 @@ interface HarvestDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertReport(report: HarvestReport)
 
+    // CHANGED TO LiveData to prevent Fragment crashes
     @Query("SELECT * FROM harvest_reports ORDER BY timestamp DESC")
-    fun getAllReports(): Flow<List<HarvestReport>>
+    fun getAllReports(): LiveData<List<HarvestReport>>
 
-    // FIX: Using IFNULL and COALESCE makes this query 100% crash-proof
     @Query("""
         SELECT IFNULL(blockId, 'Unknown') as blockId, 
                COALESCE(SUM(ripeBunches), 0) as totalRipe, 
@@ -48,34 +49,40 @@ interface HarvestDao {
         GROUP BY blockId 
         ORDER BY blockId ASC
     """)
-    fun getBlockSummaries(): Flow<List<BlockSummary>>
+    fun getBlockSummaries(): LiveData<List<BlockSummary>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertNode(node: DiscoveredNode)
 
     @Query("SELECT * FROM discovered_nodes ORDER BY lastHeard DESC")
-    fun getAllNodes(): Flow<List<DiscoveredNode>>
+    fun getAllNodes(): LiveData<List<DiscoveredNode>>
 }
 
-// FIX: Bumped to version 4 to clear corrupted database states
-@Database(entities =[HarvestReport::class, DiscoveredNode::class], version = 4, exportSchema = false)
+@Database(entities = [HarvestReport::class, DiscoveredNode::class], version = 5, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun harvestDao(): HarvestDao
 
+    // USING THE EXACT SYNCHRONIZED SINGLETON FROM YOUR OTHER APP
     companion object {
+        private const val DATABASE_NAME = "harvest_receiver.db"
+
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
-                val instance = Room.databaseBuilder(
-                    context.applicationContext,
-                    AppDatabase::class.java,
-                    "harvest-db"
-                ).fallbackToDestructiveMigration().build()
-                INSTANCE = instance
-                instance
+                INSTANCE ?: buildDatabase(context).also { INSTANCE = it }
             }
+        }
+
+        private fun buildDatabase(context: Context): AppDatabase {
+            return Room.databaseBuilder(
+                context.applicationContext,
+                AppDatabase::class.java,
+                DATABASE_NAME
+            )
+            .fallbackToDestructiveMigration()
+            .build()
         }
     }
 }

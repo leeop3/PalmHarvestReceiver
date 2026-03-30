@@ -16,7 +16,7 @@ import com.palm.harvest.data.AppDatabase
 import com.palm.harvest.data.HarvestReport
 import com.palm.harvest.data.DiscoveredNode
 import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.MutableStateFlow
+import androidx.lifecycle.MutableLiveData
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -32,7 +32,7 @@ class RNSReceiverService : Service() {
     private lateinit var db: AppDatabase
 
     companion object {
-        val serviceStatus = MutableStateFlow("Stopped")
+        val serviceStatus = MutableLiveData("Stopped")
         val localAddress = MutableStateFlow("")
         const val CHANNEL_ID = "RNS_SERVICE_CHANNEL"
         const val ACTION_CONNECT = "com.palm.harvest.CONNECT"
@@ -159,11 +159,11 @@ class RNSReceiverService : Service() {
     }
 
         fun updateLocalAddress(addr: String) {
-        localAddress.value = addr
+        localAddress.postValue(addr)
     }
 
     fun onStatusUpdate(msg: String) {
-        serviceStatus.value = msg
+        serviceStatus.postValue(msg)
         updateNotification(msg)
     }
 

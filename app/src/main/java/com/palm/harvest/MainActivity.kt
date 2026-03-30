@@ -22,7 +22,7 @@ import com.palm.harvest.ui.MainPagerAdapter
 import com.palm.harvest.ui.RadioSettingsDialog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.collectLatest
+import androidx.lifecycle.Observer
 import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
@@ -109,9 +109,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun observeStatus() {
         CoroutineScope(Dispatchers.Main).launch {
-            RNSReceiverService.serviceStatus.collectLatest { status ->
+            RNSReceiverService.serviceStatus.observe(this, Observer { status ->
                 binding.statusText.text = status
-            }
+            })
         }
     }
 }
