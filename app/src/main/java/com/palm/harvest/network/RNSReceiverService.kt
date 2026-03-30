@@ -144,10 +144,8 @@ class RNSReceiverService : Service() {
         createNotificationChannel()
         startForeground(1, createNotification("Starting RNS..."))
         
-        // Destructive Migration included for the new Node schema
-        db = Room.databaseBuilder(applicationContext, AppDatabase::class.java, "harvest-db")
-            .fallbackToDestructiveMigration()
-            .build()
+        // FIX: Use the Database Singleton so UI and Service share ONE connection
+        db = AppDatabase.getDatabase(applicationContext)
             
         if (!Python.isStarted()) Python.start(AndroidPlatform(this))
         startRnsEngine()

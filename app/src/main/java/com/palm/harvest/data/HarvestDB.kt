@@ -38,7 +38,16 @@ interface HarvestDao {
     @Query("SELECT * FROM harvest_reports ORDER BY timestamp DESC")
     fun getAllReports(): Flow<List<HarvestReport>>
 
-    @Query("SELECT blockId, SUM(ripeBunches) as totalRipe, SUM(emptyBunches) as totalEmpty, SUM(ripeBunches + emptyBunches) as totalBunches FROM harvest_reports GROUP BY blockId ORDER BY blockId ASC")
+    // FIX: Using COALESCE ensures SUM() never returns NULL and crashes Kotlin's Int mapping
+    @Query("""
+        SELECT blockId, 
+               COALESCE(SUM(ripeBunches), 0) as totalRipe, 
+               COALESCE(SUM(emptyBunches), 0) as totalEmpty, 
+               COALESCE(SUM(ripeBunches + emptyBunches), 0) as totalBunches 
+        FROM harvest_reports 
+        GROUP BY blockId 
+        ORDER BY blockId ASC
+    """)
     fun getBlockSummaries(): Flow<List<BlockSummary>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -48,7 +57,8 @@ interface HarvestDao {
     fun getAllNodes(): Flow<List<DiscoveredNode>>
 }
 
-@Database(entities = [HarvestReport::class, DiscoveredNode::class], version = 2, exportSchema = false)
+// FIX: Bumped to Version 3 to cleanly wipe old locked database connections
+@Database(entities = [HarvestReport::class, DiscoveredNode::class], version = 3, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun harvestDao(): HarvestDao
 
