@@ -1,56 +1,42 @@
 apply plugin: 'com.android.application'
 apply plugin: 'kotlin-android'
+apply plugin: 'kotlin-kapt'
 apply plugin: 'com.chaquo.python'
 
 android {
     namespace 'com.palm.harvest'
     compileSdk 34
-    
     defaultConfig {
         applicationId "com.palm.harvest"
         minSdk 24
         targetSdk 34
         versionCode 1
         versionName "1.0"
-
-        ndk {
-            abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
-        }
-
+        ndk { abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64" }
         python {
             version "3.11"
-            pip {
-                install "rns"
-                install "lxmf"
-            }
+            pip { install "rns"; install "lxmf" }
         }
     }
-
-    // FIX: Set Java compatibility to 17 using Groovy syntax
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_17
-        targetCompatibility JavaVersion.VERSION_17
-    }
-
-    // FIX: Set Kotlin JVM target to 17 using Groovy syntax
-    kotlinOptions {
-        jvmTarget = '17'
-    }
-
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+    kotlinOptions { jvmTarget = '17' }
+    buildFeatures { compose true }
+    composeOptions { kotlinCompilerExtensionVersion '1.5.1' }
     packagingOptions {
-        jniLibs {
-            useLegacyPackaging = true
-        }
-        resources {
-            excludes += '/META-INF/{AL2.0,LGPL2.1}'
-            doNotStrip "**/*.so"
-        }
+        jniLibs { useLegacyPackaging = true }
+        resources { excludes += '/META-INF/{AL2.0,LGPL2.1}'; doNotStrip "**/*.so" }
     }
 }
 
 dependencies {
     implementation "androidx.appcompat:appcompat:1.6.1"
     implementation "com.google.android.material:material:1.9.0"
-    implementation "androidx.core:core-ktx:1.10.1"
-    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.0"
+    // Room Database
+    implementation "androidx.room:room-runtime:2.6.1"
+    implementation "androidx.room:room-ktx:2.6.1"
+    kapt "androidx.room:room-compiler:2.6.1"
+    // Compose UI
+    implementation "androidx.compose.ui:ui:1.5.4"
+    implementation "androidx.compose.material3:material3:1.1.2"
+    implementation "androidx.activity:activity-compose:1.8.1"
 }
