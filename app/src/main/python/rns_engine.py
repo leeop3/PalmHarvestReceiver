@@ -4,7 +4,7 @@ import importlib.util, importlib.machinery
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-# --- HIJACKS ---
+# --- 1. THE HIJACKS & MOCKS ---
 platform.system = lambda: "Linux"
 def mock_module(name):
     if name not in sys.modules:
@@ -22,11 +22,19 @@ def mock_module(name):
 mock_module("usbserial4a"); mock_module("usb4a"); mock_module("jnius")
 sys.modules["usb4a.usb"] = sys.modules["usb4a"].usb
 
+# --- 2. IMPORT RNS & DISABLE ANDROID VALIDATION ---
 import RNS
 try:
     import RNS.vendor.platformutils as pu
     pu.is_android = lambda: False
 except: pass
+
+# --- 3. FIX PYSERIAL PROTOCOL HANDLERS ---
+# This is the missing piece. It forces pyserial to recognize "socket://" URLs
+try:
+    import serial.urlhandler.protocol_socket
+except ImportError:
+    print("RNS-LOG: Warning - could not explicitly load pyserial socket handler")
 
 from LXMF import LXMRouter
 from RNS.Interfaces.RNodeInterface import RNodeInterface
@@ -46,17 +54,13 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
         f.write("[reticulum]\nenable_transport = True\n\n[interfaces]\n")
 
     try:
-        # LOG_EXTREME ensures we see every byte moving
-        RNS.Reticulum(configdir=rns_dir, loglevel=RNS.LOG_EXTREME)
-        
-        id_path = os.path.join(storage_path, "storage_identity")
+        RNS.Reticulum(configdir=rns_dir, loglevel=RNS.LOG_DEBUG)
+        id_path = os.path.join(rns_dir, "storage_identity")
         local_id = RNS.Identity.from_file(id_path) if os.path.exists(id_path) else RNS.Identity()
         if not os.path.exists(id_path): local_id.to_file(id_path)
-        
         router = LXMRouter(identity=local_id, storagepath=os.path.join(storage_path, ".lxmf"))
         local_destination = router.register_delivery_identity(local_id, display_name="PalmReceiver")
         router.register_delivery_callback(on_lxmf)
-        
         service_obj.onStatusUpdate(f"RNS Online: {RNS.hexrep(local_destination.hash, False)}")
     except Exception as e:
         service_obj.onStatusUpdate(f"Init Error: {str(e)}")
@@ -66,13 +70,13 @@ def inject_rnode(radio_params_json):
         params = json.loads(radio_params_json)
         print("RNS-LOG: Step 1 - Preparing Config")
         
+        # We provide a valid URL string to the 'port' key.
+        # pyserial will use the socket handler we imported above.
         ictx = {
             "name": "RNode-Bridge",
             "type": "RNodeInterface",
             "enabled": True,
-            "port": None,            
-            "tcp_host": "127.0.0.1",
-            "tcp_port": 8001,
+            "port": "socket://127.0.0.1:8001", 
             "frequency": int(params.get("freq")),
             "bandwidth": int(params.get("bw")),
             "txpower": int(params.get("tx")),
@@ -82,20 +86,17 @@ def inject_rnode(radio_params_json):
         }
         
         print("RNS-LOG: Step 2 - Creating Interface Object")
-        # Instantiate. This is where it usually hangs waiting for RNode version response.
         ifac = RNodeInterface(RNS.Transport, ictx)
         
         print("RNS-LOG: Step 3 - Registering Interface")
         ifac.mode = Interface.MODE_FULL
         RNS.Transport.interfaces.append(ifac)
         
-        print("RNS-LOG: Step 4 - Triggering Announce")
         if local_destination: local_destination.announce()
-        
-        return "RNode Injected Successfully"
+        return "RNode Link Active"
     except Exception as e:
-        print(f"RNS-LOG: Step 5 - FAILED: {str(e)}")
-        return f"Injection Error: {str(e)}"
+        print(f"RNS-LOG: Injection Failed: {str(e)}")
+        return f"Link Error: {str(e)}"
 
 def on_lxmf(lxm):
     try:
