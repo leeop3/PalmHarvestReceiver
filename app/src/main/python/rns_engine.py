@@ -3,19 +3,17 @@ signal.signal = lambda sig, handler: None
 import RNS, LXMF, os, csv, io
 from LXMF import LXMRouter
 
-def start_engine(service_obj, storage_path, radio_params_java):
-    # FIX: Convert Java/Kotlin Map to native Python dictionary
-    radio_params = dict(radio_params_java)
-    
+def start_engine(service_obj, storage_path, radio_params):
     rns_dir = os.path.join(storage_path, ".reticulum")
     if not os.path.exists(rns_dir): os.makedirs(rns_dir)
     
-    # Now .get(key, default) works perfectly
-    freq = radio_params.get("freq", 915000000)
-    bw = radio_params.get("bw", 125000)
-    tx = radio_params.get("tx", 20)
-    sf = radio_params.get("sf", 7)
-    cr = radio_params.get("cr", 5)
+    # FIX: Access Java Map using 1-argument .get() and Python 'or' for defaults
+    # Java .get() returns None if the key is missing
+    freq = radio_params.get("freq") or 915000000
+    bw   = radio_params.get("bw")   or 125000
+    tx   = radio_params.get("tx")   or 20
+    sf   = radio_params.get("sf")   or 7
+    cr   = radio_params.get("cr")   or 5
 
     config = f"""
 [reticulum]
@@ -26,7 +24,7 @@ share_instance = Yes
   [[RNode Interface]]
     type = RNodeInterface
     enabled = True
-    # We point the RNode interface to the local TCP bridge
+    # Connectivity via the Kotlin TCP Bridge
     port = tcp://127.0.0.1:8001
     frequency = {freq}
     bandwidth = {bw}
