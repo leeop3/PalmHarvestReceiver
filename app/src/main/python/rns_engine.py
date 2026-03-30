@@ -1,4 +1,4 @@
-import os, sys, time, platform, json, csv, io, signal, warnings
+import os, sys, time, platform, json, csv, io, signal, warnings, shutil
 from types import ModuleType
 import importlib.util, importlib.machinery
 
@@ -40,15 +40,23 @@ local_destination = None
 def start_engine(service_obj, storage_path, radio_params_json=None):
     global kotlin_cb, local_destination
     kotlin_cb = service_obj
-    rns_dir = os.path.join(storage_path, ".reticulum")
-    if not os.path.exists(rns_dir): os.makedirs(rns_dir)
     
-    # CRITICAL: Wipe old config to stop the "socket://127.0.0.1:8001" error loop
+    rns_dir = os.path.join(storage_path, ".reticulum")
+    
+    # --- NUCLEAR RESET: Delete old config directory to stop the 8001 loop ---
+    if os.path.exists(rns_dir):
+        try: shutil.rmtree(rns_dir)
+        except: pass
+    os.makedirs(rns_dir)
+    
+    # Create a fresh, empty config
     with open(os.path.join(rns_dir, "config"), "w") as f:
         f.write("[reticulum]\nenable_transport = True\nshare_instance = Yes\n\n[interfaces]\n")
 
     try:
+        # Start fresh Reticulum instance
         RNS.Reticulum(configdir=rns_dir, loglevel=RNS.LOG_DEBUG)
+        
         id_path = os.path.join(storage_path, "storage_identity")
         local_id = RNS.Identity.from_file(id_path) if os.path.exists(id_path) else RNS.Identity()
         if not os.path.exists(id_path): local_id.to_file(id_path)
@@ -56,6 +64,7 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
         router = LXMRouter(identity=local_id, storagepath=os.path.join(storage_path, ".lxmf"))
         local_destination = router.register_delivery_identity(local_id, display_name="PalmReceiver")
         router.register_delivery_callback(on_lxmf)
+        
         service_obj.onStatusUpdate(f"RNS Online: {RNS.hexrep(local_destination.hash, False)}")
     except Exception as e:
         service_obj.onStatusUpdate(f"Init Error: {str(e)}")
@@ -64,14 +73,14 @@ def inject_rnode(radio_params_json):
     try:
         params = json.loads(radio_params_json)
         
-        # CORRECT CONFIGURATION: port=None, target_host/port defined separately
+        # NEW INTERFACE NAME: Forced new name to ensure no collision with old failed ones
         ictx = {
-            "name": "RNode-Bridge",
+            "name": "PalmMesh-Link",
             "type": "RNodeInterface",
             "enabled": True,
-            "port": None,             # Sets driver to TCP mode
+            "port": None,             # Triggers TCP logic
             "tcp_host": "127.0.0.1",  # Matches bridge host
-            "tcp_port": 7633,         # Matches bridge port
+            "tcp_port": 7633,         # Matches rnshello bridge port
             "frequency": int(params.get("freq")),
             "bandwidth": int(params.get("bw")),
             "txpower": int(params.get("tx")),
@@ -80,15 +89,15 @@ def inject_rnode(radio_params_json):
             "flow_control": False
         }
         
-        print("RNS-LOG: Creating RNodeInterface over TCP 127.0.0.1:7633")
+        print("RNS-LOG: Injecting PalmMesh-Link on 127.0.0.1:7633")
         ifac = RNodeInterface(RNS.Transport, ictx)
         ifac.mode = Interface.MODE_FULL
         RNS.Transport.interfaces.append(ifac)
         
         if local_destination: local_destination.announce()
-        return "RNode TCP Link Active"
+        return "RNode Handshake Successful"
     except Exception as e:
-        return f"TCP Link Error: {str(e)}"
+        return f"Link Error: {str(e)}"
 
 def on_lxmf(lxm):
     try:
