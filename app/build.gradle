@@ -26,13 +26,13 @@ android {
         }
     }
 
-    # FIX: Set Java compatibility to 17
+    // FIX: Set Java compatibility to 17 using Groovy syntax
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
 
-    # FIX: Set Kotlin JVM target to 17
+    // FIX: Set Kotlin JVM target to 17 using Groovy syntax
     kotlinOptions {
         jvmTarget = '17'
     }
