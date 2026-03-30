@@ -29,8 +29,7 @@ try:
 except: pass
 
 from LXMF import LXMRouter
-# IMPORTANT: Import the Android-specific class if using the rnshello config style
-from RNS.Interfaces.Android.RNodeInterface import RNodeInterface
+from RNS.Interfaces.RNodeInterface import RNodeInterface
 from RNS.Interfaces.Interface import Interface
 
 signal.signal = lambda sig, handler: None
@@ -43,14 +42,17 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
     kotlin_cb = service_obj
     rns_dir = os.path.join(storage_path, ".reticulum")
     if not os.path.exists(rns_dir): os.makedirs(rns_dir)
+    
+    # CRITICAL: Wipe old config to stop the "socket://127.0.0.1:8001" error loop
     with open(os.path.join(rns_dir, "config"), "w") as f:
         f.write("[reticulum]\nenable_transport = True\nshare_instance = Yes\n\n[interfaces]\n")
 
     try:
-        RNS.Reticulum(configdir=rns_dir)
+        RNS.Reticulum(configdir=rns_dir, loglevel=RNS.LOG_DEBUG)
         id_path = os.path.join(storage_path, "storage_identity")
         local_id = RNS.Identity.from_file(id_path) if os.path.exists(id_path) else RNS.Identity()
         if not os.path.exists(id_path): local_id.to_file(id_path)
+        
         router = LXMRouter(identity=local_id, storagepath=os.path.join(storage_path, ".lxmf"))
         local_destination = router.register_delivery_identity(local_id, display_name="PalmReceiver")
         router.register_delivery_callback(on_lxmf)
@@ -61,14 +63,15 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
 def inject_rnode(radio_params_json):
     try:
         params = json.loads(radio_params_json)
-        # Using the EXACT dictionary structure from rnshello
+        
+        # CORRECT CONFIGURATION: port=None, target_host/port defined separately
         ictx = {
-            "name": "Android RNode Bridge",
+            "name": "RNode-Bridge",
             "type": "RNodeInterface",
-            "interface_enabled": True,
-            "outgoing": True,
-            "tcp_host": "127.0.0.1",
-            "tcp_port": 7633,
+            "enabled": True,
+            "port": None,             # Sets driver to TCP mode
+            "tcp_host": "127.0.0.1",  # Matches bridge host
+            "tcp_port": 7633,         # Matches bridge port
             "frequency": int(params.get("freq")),
             "bandwidth": int(params.get("bw")),
             "txpower": int(params.get("tx")),
@@ -77,19 +80,15 @@ def inject_rnode(radio_params_json):
             "flow_control": False
         }
         
-        # Instantiate directly from the class
-        new_ifac = RNodeInterface(RNS.Transport, ictx)
-        new_ifac.IN = True
-        new_ifac.OUT = True
+        print("RNS-LOG: Creating RNodeInterface over TCP 127.0.0.1:7633")
+        ifac = RNodeInterface(RNS.Transport, ictx)
+        ifac.mode = Interface.MODE_FULL
+        RNS.Transport.interfaces.append(ifac)
         
-        # Push into transport
-        RNS.Transport.interfaces.append(new_ifac)
-        
-        time.sleep(1)
         if local_destination: local_destination.announce()
-        return "RNode Hardware Handshake Successful"
+        return "RNode TCP Link Active"
     except Exception as e:
-        return f"Link Failed: {str(e)}"
+        return f"TCP Link Error: {str(e)}"
 
 def on_lxmf(lxm):
     try:
