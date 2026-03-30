@@ -2,27 +2,31 @@ import sys, os, csv, io, json, signal, time
 from types import ModuleType
 import importlib.util, importlib.machinery
 
-# --- ROBUST ANDROID MOCK FIX ---
-# We create fake specs to satisfy Reticulum's internal importlib.util.find_spec calls
+# --- THE ULTIMATE ANDROID MOCK FIX ---
+# Satisfies Reticulum's Android-specific dependency checks
 def mock_module(name):
     mock = ModuleType(name)
     mock.__spec__ = importlib.machinery.ModuleSpec(name, None)
     sys.modules[name] = mock
     return mock
 
-# Create the mocks
-usb_mock = mock_module("usbserial4a")
-usb_mock.serial4a = ModuleType("serial4a")
-usb_mock.get_ports_list = lambda: []
+# Mock usbserial4a
+usbserial_mock = mock_module("usbserial4a")
+usbserial_mock.serial4a = ModuleType("serial4a")
+usbserial_mock.get_ports_list = lambda: []
 
+# Mock usb4a (The missing piece causing the current error)
+usb4a_mock = mock_module("usb4a")
+
+# Mock jnius
 jnius_mock = mock_module("jnius")
 jnius_mock.autoclass = lambda x: ModuleType("DummyClass")
 jnius_mock.cast = lambda x, y: x
 
-# Overload find_spec to return our mock specs
+# Overload find_spec to satisfy Reticulum's import checks
 _orig_find_spec = importlib.util.find_spec
 def _mock_find_spec(name, package=None):
-    if name in ["usbserial4a", "jnius"]:
+    if name in ["usbserial4a", "jnius", "usb4a"]:
         return sys.modules[name].__spec__
     return _orig_find_spec(name, package)
 importlib.util.find_spec = _mock_find_spec
@@ -43,6 +47,7 @@ def start_engine(service_obj, storage_path, radio_params_json):
     sf = params.get("sf", 7)
     cr = params.get("cr", 5)
 
+    # Use a configuration that points the RNode interface to the local TCP bridge
     config = f"""
 [reticulum]
 enable_transport = True
@@ -52,7 +57,6 @@ share_instance = Yes
   [[RNode Interface]]
     type = RNodeInterface
     enabled = True
-    # Connectivity via the Kotlin TCP Bridge
     port = tcp://127.0.0.1:8001
     frequency = {f}
     bandwidth = {bw}
