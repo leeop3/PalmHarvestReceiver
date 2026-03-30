@@ -2,31 +2,32 @@ import sys, os, csv, io, json, signal, time
 from types import ModuleType
 import importlib.util, importlib.machinery
 
-# --- THE ULTIMATE ANDROID MOCK FIX ---
-# Satisfies Reticulum's Android-specific dependency checks
+# --- THE DEEP ANDROID MOCK FIX ---
 def mock_module(name):
     mock = ModuleType(name)
     mock.__spec__ = importlib.machinery.ModuleSpec(name, None)
     sys.modules[name] = mock
     return mock
 
-# Mock usbserial4a
+# 1. Mock usbserial4a and its sub-attr
 usbserial_mock = mock_module("usbserial4a")
 usbserial_mock.serial4a = ModuleType("serial4a")
 usbserial_mock.get_ports_list = lambda: []
 
-# Mock usb4a (The missing piece causing the current error)
+# 2. Mock usb4a and the specific 'usb' name Reticulum wants to import
 usb4a_mock = mock_module("usb4a")
+usb4a_mock.usb = ModuleType("usb") # This fixes the "cannot import name 'usb'" error
+sys.modules["usb4a.usb"] = usb4a_mock.usb 
 
-# Mock jnius
+# 3. Mock jnius
 jnius_mock = mock_module("jnius")
 jnius_mock.autoclass = lambda x: ModuleType("DummyClass")
 jnius_mock.cast = lambda x, y: x
 
-# Overload find_spec to satisfy Reticulum's import checks
+# 4. Overload find_spec
 _orig_find_spec = importlib.util.find_spec
 def _mock_find_spec(name, package=None):
-    if name in ["usbserial4a", "jnius", "usb4a"]:
+    if name in ["usbserial4a", "jnius", "usb4a", "usb4a.usb"]:
         return sys.modules[name].__spec__
     return _orig_find_spec(name, package)
 importlib.util.find_spec = _mock_find_spec
@@ -47,7 +48,6 @@ def start_engine(service_obj, storage_path, radio_params_json):
     sf = params.get("sf", 7)
     cr = params.get("cr", 5)
 
-    # Use a configuration that points the RNode interface to the local TCP bridge
     config = f"""
 [reticulum]
 enable_transport = True
@@ -69,6 +69,7 @@ share_instance = Yes
         f_out.write(config)
 
     try:
+        # Now that mocks are perfect, Reticulum will initialize the interface
         RNS.Reticulum(configdir=rns_dir)
         
         id_path = os.path.join(storage_path, "storage_identity")
