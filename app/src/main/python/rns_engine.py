@@ -1,116 +1,123 @@
-import os, sys, platform, time, csv, io, json, signal
+import os, sys, time, base64, platform, json, csv, io, signal, warnings
 from types import ModuleType
 import importlib.util, importlib.machinery
 
-# --- 1. THE GLOBAL HIJACK ---
-# Kill the Android flag before Reticulum even wakes up
+# --- 1. THE ULTIMATE MOCKS (From rnshello + Improvements) ---
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+class Dummy:
+    def __getattr__(self, name): return Dummy()
+    def __call__(self, *args, **kwargs): return Dummy()
+    def __len__(self): return 0
+
+def mock_module(name):
+    mock = ModuleType(name)
+    mock.__spec__ = importlib.machinery.ModuleSpec(name, None)
+    if name == "usbserial4a": 
+        mock.serial4a = Dummy()
+        mock.get_ports_list = lambda: []
+    if name == "usb4a":
+        mock.usb = Dummy()
+    if name == "jnius":
+        mock.autoclass = lambda x: Dummy()
+        mock.cast = lambda x, y: Dummy()
+    sys.modules[name] = mock
+    return mock
+
+mock_module("usbserial4a"); mock_module("usb4a"); mock_module("jnius")
+sys.modules["usb4a.usb"] = sys.modules["usb4a"].usb
+
+_orig_find_spec = importlib.util.find_spec
+def _mock_find_spec(name, package=None):
+    if name in ["usbserial4a", "jnius", "usb4a", "usb4a.usb"]: return sys.modules[name].__spec__
+    return _orig_find_spec(name, package)
+importlib.util.find_spec = _mock_find_spec
+
+# --- 2. THE HIJACK ---
 platform.system = lambda: "Linux"
 
-# --- 2. DEEP MOCKS ---
-def mock_module(name):
-    if name not in sys.modules:
-        mock = ModuleType(name)
-        mock.__spec__ = importlib.machinery.ModuleSpec(name, None)
-        if name == "usbserial4a": mock.get_ports_list = lambda: []
-        if name == "jnius":
-            class Dummy:
-                def autoclass(self, n): return self
-                def cast(self, x, y): return x
-            mock.autoclass = lambda x: Dummy()
-        if name == "usb4a":
-            mock.usb = ModuleType("usb")
-            mock.usb.get_usb_device_list = lambda: []
-        sys.modules[name] = mock
-mock_module("usbserial4a"); mock_module("usb4a"); mock_module("jnius")
-
-# --- 3. IMPORT RNS & DISABLE ANDROID VALIDATION ---
-import RNS
-# Forcefully tell Reticulum it is NOT on Android
-try:
-    import RNS.vendor.platformutils as pu
-    pu.is_android = lambda: False
-except:
-    pass
-
-import LXMF
+import RNS, LXMF
 from LXMF import LXMRouter
-# IMPORTANT: Explicitly import the Universal/Linux RNodeInterface
-from RNS.Interfaces.RNodeInterface import RNodeInterface
 from RNS.Interfaces.Interface import Interface
 
+# Disable signals
 signal.signal = lambda sig, handler: None
 
-# --- 4. ENGINE LOGIC ---
+# --- 3. PALM HARVEST ENGINE LOGIC ---
 kotlin_cb = None
 router = None
+local_destination = None
 
-def start_engine(service_obj, storage_path, radio_params_json):
-    global kotlin_cb, router
+def start_engine(service_obj, storage_path):
+    global kotlin_cb, router, local_destination
     kotlin_cb = service_obj
     
     rns_dir = os.path.join(storage_path, ".reticulum")
     if not os.path.exists(rns_dir): os.makedirs(rns_dir)
     
-    # Empty config - we inject everything manually
+    # Start with empty interfaces
     with open(os.path.join(rns_dir, "config"), "w") as f:
-        f.write("[reticulum]\nenable_transport = True\n\n[interfaces]")
+        f.write("[reticulum]\nenable_transport = True\nshare_instance = Yes\n\n[interfaces]")
 
-    try:
-        RNS.Reticulum(configdir=rns_dir)
-        id_path = os.path.join(storage_path, "storage_identity")
-        local_id = RNS.Identity.from_file(id_path) if os.path.exists(id_path) else RNS.Identity()
-        if not os.path.exists(id_path): local_id.to_file(id_path)
-                
-        router = LXMRouter(identity=local_id, storagepath=storage_path)
-        router.register_delivery_callback(lambda lxm: on_lxmf(lxm, service_obj))
-        
-        service_obj.onStatusUpdate(f"RNS Online: {RNS.hexrep(local_id.hash, False)}")
-    except Exception as e:
-        service_obj.onStatusUpdate(f"RNS Init Error: {str(e)}")
+    RNS.Reticulum(configdir=rns_dir)
+    
+    id_path = os.path.join(rns_dir, "storage_identity")
+    local_id = RNS.Identity.from_file(id_path) if os.path.exists(id_path) else RNS.Identity()
+    if not os.path.exists(id_path): local_id.to_file(id_path)
+
+    router = LXMRouter(identity=local_id, storagepath=os.path.join(storage_path, ".lxmf"))
+    local_destination = router.register_delivery_identity(local_id, display_name="PalmReceiver")
+    router.register_delivery_callback(on_lxmf)
+    
+    addr = RNS.hexrep(local_destination.hash, False)
+    kotlin_cb.onStatusUpdate(f"RNS Online: {addr}")
 
 def inject_rnode(radio_params_json):
+    # This uses the Manual Injection technique from your rnshello code
     try:
         params = json.loads(radio_params_json)
+        # Import the class directly
+        from RNS.Interfaces.RNodeInterface import RNodeInterface
         
-        # We define a "Ghost" config. 
-        # By not calling Transport.synthesize_interface, we skip the Android validator.
         ictx = {
-            "name": "RNode-Mesh",
-            "type": "RNodeInterface", # We keep this for internal RNS logic
-            "enabled": True,
-            "port": "tcp://127.0.0.1:8001",
-            "frequency": params.get("freq") or 915000000,
-            "bandwidth": params.get("bw") or 125000,
-            "txpower": params.get("tx") or 20,
-            "spreadingfactor": params.get("sf") or 7,
-            "codingrate": params.get("cr") or 5,
+            "name": "RNode-Bridge",
+            "type": "RNodeInterface",
+            "interface_enabled": True,
+            "outgoing": True,
+            "port": "socket://127.0.0.1:8001", # High-speed socket bridge
+            "frequency": int(params.get("freq")),
+            "bandwidth": int(params.get("bw")),
+            "txpower": int(params.get("tx")),
+            "spreadingfactor": int(params.get("sf")),
+            "codingrate": int(params.get("cr")),
             "flow_control": False
         }
         
-        # Manual Instantiation of the Universal Driver
-        # This bypasses the synthesized check that throws the "invalid interface" error
-        ifac = RNodeInterface(RNS.Transport, ictx)
-        ifac.mode = Interface.MODE_FULL
+        # Instantiate and manually push into Transport
+        new_ifac = RNodeInterface(RNS.Transport, ictx)
+        new_ifac.mode = Interface.MODE_FULL
+        RNS.Transport.interfaces.append(new_ifac)
         
-        # Add directly to the transport stack
-        RNS.Transport.interfaces.append(ifac)
+        # Trigger an announce to the mesh to show we are online
+        time.sleep(1)
+        if local_destination: local_destination.announce()
         
-        return f"RNode Active: {params.get('freq')/1000000} MHz"
+        return f"Radio Online: {int(params.get('freq'))/1000000} MHz"
     except Exception as e:
-        return f"Injection Error: {str(e)}"
+        return f"Link Failed: {str(e)}"
 
-def on_lxmf(lxm, service_obj):
+def on_lxmf(lxm):
     try:
         content = lxm.content.decode("utf-8")
         if "harvester_id" in content:
             f_io = io.StringIO(content)
             reader = csv.DictReader(f_io)
             for row in reader:
-                service_obj.onHarvestReceived(
+                kotlin_cb.onHarvestReceived(
                     row['id'], row['harvester_id'], row['block_id'],
                     int(row['ripe_bunches']), int(row['empty_bunches']),
                     float(row['latitude']), float(row['longitude']),
                     int(row['timestamp']), row.get('photo_file', "")
                 )
     except Exception as e:
-        service_obj.onStatusUpdate(f"Data Error: {str(e)}")
+        kotlin_cb.onStatusUpdate(f"Data Error: {e}")
