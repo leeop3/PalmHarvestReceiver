@@ -4,7 +4,7 @@ import importlib.util, importlib.machinery
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-# --- 1. THE HIJACKS & MOCKS ---
+# --- HIJACKS ---
 platform.system = lambda: "Linux"
 def mock_module(name):
     if name not in sys.modules:
@@ -40,31 +40,20 @@ local_destination = None
 def start_engine(service_obj, storage_path, radio_params_json=None):
     global kotlin_cb, local_destination
     kotlin_cb = service_obj
-    
     rns_dir = os.path.join(storage_path, ".reticulum")
-    
-    # --- NUCLEAR RESET: Delete old config directory to stop the 8001 loop ---
-    if os.path.exists(rns_dir):
-        try: shutil.rmtree(rns_dir)
-        except: pass
+    if os.path.exists(rns_dir): shutil.rmtree(rns_dir)
     os.makedirs(rns_dir)
-    
-    # Create a fresh, empty config
     with open(os.path.join(rns_dir, "config"), "w") as f:
         f.write("[reticulum]\nenable_transport = True\nshare_instance = Yes\n\n[interfaces]\n")
 
     try:
-        # Start fresh Reticulum instance
         RNS.Reticulum(configdir=rns_dir, loglevel=RNS.LOG_DEBUG)
-        
         id_path = os.path.join(storage_path, "storage_identity")
         local_id = RNS.Identity.from_file(id_path) if os.path.exists(id_path) else RNS.Identity()
         if not os.path.exists(id_path): local_id.to_file(id_path)
-        
         router = LXMRouter(identity=local_id, storagepath=os.path.join(storage_path, ".lxmf"))
         local_destination = router.register_delivery_identity(local_id, display_name="PalmReceiver")
         router.register_delivery_callback(on_lxmf)
-        
         service_obj.onStatusUpdate(f"RNS Online: {RNS.hexrep(local_destination.hash, False)}")
     except Exception as e:
         service_obj.onStatusUpdate(f"Init Error: {str(e)}")
@@ -72,15 +61,16 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
 def inject_rnode(radio_params_json):
     try:
         params = json.loads(radio_params_json)
-        
-        # NEW INTERFACE NAME: Forced new name to ensure no collision with old failed ones
+        # We provide BOTH tcp_ and target_ keys to satisfy any Reticulum version
         ictx = {
             "name": "PalmMesh-Link",
             "type": "RNodeInterface",
             "enabled": True,
-            "port": None,             # Triggers TCP logic
-            "tcp_host": "127.0.0.1",  # Matches bridge host
-            "tcp_port": 7633,         # Matches rnshello bridge port
+            "port": None,
+            "tcp_host": "127.0.0.1",
+            "tcp_port": 7633,
+            "target_host": "127.0.0.1",
+            "target_port": 7633,
             "frequency": int(params.get("freq")),
             "bandwidth": int(params.get("bw")),
             "txpower": int(params.get("tx")),
@@ -89,14 +79,15 @@ def inject_rnode(radio_params_json):
             "flow_control": False
         }
         
-        print("RNS-LOG: Injecting PalmMesh-Link on 127.0.0.1:7633")
+        print("RNS-LOG: Creating RNodeInterface object...")
         ifac = RNodeInterface(RNS.Transport, ictx)
         ifac.mode = Interface.MODE_FULL
         RNS.Transport.interfaces.append(ifac)
         
         if local_destination: local_destination.announce()
-        return "RNode Handshake Successful"
+        return "RNode Active"
     except Exception as e:
+        print(f"RNS-LOG: Injection Error: {str(e)}")
         return f"Link Error: {str(e)}"
 
 def on_lxmf(lxm):

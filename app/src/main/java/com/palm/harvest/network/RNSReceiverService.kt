@@ -1,7 +1,6 @@
 package com.palm.harvest.network
 
 import android.app.*
-import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
 import android.content.Context
@@ -20,6 +19,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.ServerSocket
+import java.net.Socket
 import java.util.*
 import androidx.room.Room
 import org.json.JSONObject
@@ -63,61 +63,65 @@ class RNSReceiverService : Service() {
                 btSocket?.close()
                 tcpServer?.close()
                 
-                // Use the 'Insecure' method from rnshello for better compatibility
+                // 1. Setup Bluetooth Insecurely (Fastest)
                 val m = device.javaClass.getMethod("createInsecureRfcommSocket", Int::class.javaPrimitiveType)
                 btSocket = m.invoke(device, 1) as BluetoothSocket
                 btSocket?.connect()
                 
-                // Adopt Port 7633 from rnshello
+                // 2. Setup TCP Server FIRST
                 tcpServer = ServerSocket()
                 tcpServer?.reuseAddress = true
                 tcpServer?.bind(InetSocketAddress("127.0.0.1", 7633))
                 
-                onStatusUpdate("Bridge 7633 Ready")
+                onStatusUpdate("Bridge 7633 Listening")
                 
-                // Trigger Python RNS to link to this port
+                // 3. Launch the Pipe Handlers in background so accept() doesn't block them
+                launch { handleTcpClients() }
+
+                // 4. NOW tell Python to inject
+                delay(500)
                 injectPythonInterface()
-
-                val client = tcpServer?.accept() ?: return@launch
-                client.tcpNoDelay = true
-                val btIn = btSocket!!.inputStream
-                val btOut = btSocket!!.outputStream
-                val tcpIn = client.inputStream
-                val tcpOut = client.outputStream
-
-                // BT -> TCP Pipe
-                launch {
-                    val buf = ByteArray(1024)
-                    try {
-                        var r = 0 // FIX: Explicitly initialized
-                        while (isActive && btIn.read(buf).also { r = it } != -1) {
-                            if (r > 0) {
-                                tcpOut.write(buf, 0, r)
-                                tcpOut.flush()
-                            }
-                        }
-                    } catch (e: Exception) { Log.e("RNS-BRIDGE", "BT Read Error") }
-                }
-
-                // TCP -> BT Pipe
-                launch {
-                    val buf = ByteArray(1024)
-                    try {
-                        var r = 0 // FIX: Explicitly initialized
-                        while (isActive && tcpIn.read(buf).also { r = it } != -1) {
-                            if (r > 0) {
-                                btOut.write(buf, 0, r)
-                                btOut.flush()
-                            }
-                        }
-                    } catch (e: Exception) { Log.e("RNS-BRIDGE", "TCP Read Error") }
-                }
-
-                onStatusUpdate("Mesh Link Established")
 
             } catch (e: Exception) {
                 onStatusUpdate("Bridge Error")
-                Log.e("PalmHarvest", "BT Bridge fail", e)
+                Log.e("PalmHarvest", "Bridge Failed", e)
+            }
+        }
+    }
+
+    private suspend fun handleTcpClients() {
+        withContext(Dispatchers.IO) {
+            while (isActive) {
+                try {
+                    val client = tcpServer?.accept() ?: break
+                    client.tcpNoDelay = true
+                    onStatusUpdate("Mesh Link Active")
+
+                    val btIn = btSocket!!.inputStream
+                    val btOut = btSocket!!.outputStream
+                    val tcpIn = client.inputStream
+                    val tcpOut = client.outputStream
+
+                    // BT -> TCP
+                    launch {
+                        val buf = ByteArray(2048)
+                        var r: Int
+                        while (isActive && btIn.read(buf).also { r = it } != -1) {
+                            tcpOut.write(buf, 0, r)
+                            tcpOut.flush()
+                        }
+                    }
+
+                    // TCP -> BT
+                    launch {
+                        val buf = ByteArray(2048)
+                        var r: Int
+                        while (isActive && tcpIn.read(buf).also { r = it } != -1) {
+                            btOut.write(buf, 0, r)
+                            btOut.flush()
+                        }
+                    }
+                } catch (e: Exception) { break }
             }
         }
     }
@@ -132,8 +136,6 @@ class RNSReceiverService : Service() {
             json.put("tx", prefs.getInt("tx", 20))
             json.put("sf", prefs.getInt("sf", 7))
             json.put("cr", prefs.getInt("cr", 5))
-            
-            // Trigger Python to inject the interface pointing to 7633
             py.getModule("rns_engine").callAttr("inject_rnode", json.toString())
         }
     }
@@ -166,6 +168,11 @@ class RNSReceiverService : Service() {
         }
     }
 
+    private fun updateNotification(content: String) {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.notify(1, createNotification(content))
+    }
+
     private fun createNotification(content: String): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Palm Harvest Receiver")
@@ -173,11 +180,6 @@ class RNSReceiverService : Service() {
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setOngoing(true)
             .build()
-    }
-
-    private fun updateNotification(content: String) {
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.notify(1, createNotification(content))
     }
 
     private fun createNotificationChannel() {
