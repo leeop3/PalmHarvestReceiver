@@ -30,11 +30,19 @@ interface HarvestDao {
     @Query("SELECT * FROM harvest_reports ORDER BY timestamp DESC")
     fun getAllReports(): Flow<List<HarvestReport>>
 
-    @Query("SELECT harvesterId, SUM(ripeBunches) as totalRipe, SUM(emptyBunches) as totalEmpty, COUNT(id) as reportCount FROM harvest_reports GROUP BY harvesterId")
+    @Query("""
+        SELECT harvesterId, 
+               SUM(ripeBunches) as totalRipe, 
+               SUM(emptyBunches) as totalEmpty, 
+               COUNT(id) as reportCount 
+        FROM harvest_reports 
+        GROUP BY harvesterId
+    """)
     fun getSummaries(): Flow<List<HarvesterSummary>>
 }
 
-@Database(entities = [HarvestReport::class], version = 1)
+// FIX: Set exportSchema = false to remove the Kapt warning
+@Database(entities = [HarvestReport::class], version = 1, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun harvestDao(): HarvestDao
 }
