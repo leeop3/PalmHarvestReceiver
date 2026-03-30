@@ -1,10 +1,7 @@
 import signal
-# FIX: Monkey-patch signal.signal before importing RNS
-# This prevents the "signal only works in main thread" error on Android
-original_signal = signal.signal
 signal.signal = lambda sig, handler: None
 
-import RNS, LXMF, os, csv, io
+import RNS, LXMF, os, csv, io, time
 from LXMF import LXMRouter
 
 kotlin_cb = None
@@ -13,39 +10,41 @@ def start_engine(callback_obj, storage_path):
     global kotlin_cb
     kotlin_cb = callback_obj
     
-    try:
-        # 1. Setup RNS Directories
-        rns_dir = os.path.join(storage_path, ".reticulum")
-        if not os.path.exists(rns_dir): os.makedirs(rns_dir)
-        
-        # 2. Initialize Reticulum 
-        # RNS will now call our "fake" signal function and won't crash
-        RNS.Reticulum(configdir=rns_dir)
-        
-        # 3. Setup LXMF
-        # We use a persistent identity file so the address doesn't change every time
-        id_path = os.path.join(storage_path, "storage_identity")
-        if os.path.exists(id_path):
-            local_id = RNS.Identity.from_file(id_path)
-        else:
-            local_id = RNS.Identity()
-            local_id.to_file(id_path)
+    rns_dir = os.path.join(storage_path, ".reticulum")
+    if not os.path.exists(rns_dir): os.makedirs(rns_dir)
+    
+    # Create the config file for Reticulum to use the TCP Bridge
+    config_data = f"""
+[reticulum]
+enable_transport = True
+share_instance = Yes
+
+[interfaces]
+  [[TCP Bridge]]
+    type = TCPClientInterface
+    enabled = True
+    outgoing = True
+    target_host = 127.0.0.1
+    target_port = 8001
+"""
+    with open(os.path.join(rns_dir, "config"), "w") as f:
+        f.write(config_data)
+
+    RNS.Reticulum(configdir=rns_dir)
+    
+    id_path = os.path.join(storage_path, "storage_identity")
+    local_id = RNS.Identity.from_file(id_path) if os.path.exists(id_path) else RNS.Identity()
+    if not os.path.exists(id_path): local_id.to_file(id_path)
             
-        lxm_router = LXMRouter(identity=local_id, storagepath=storage_path)
-        lxm_router.register_delivery_callback(on_lxm_received)
-        
-        # Tell Kotlin we are ready
-        addr = RNS.hexrep(local_id.hash, False)
-        kotlin_cb.onStatusUpdate(f"RNS Online. Address: {addr}")
-        
-    except Exception as e:
-        if kotlin_cb:
-            kotlin_cb.onStatusUpdate(f"Engine Error: {str(e)}")
+    lxm_router = LXMRouter(identity=local_id, storagepath=storage_path)
+    lxm_router.register_delivery_callback(on_lxm_received)
+    
+    addr = RNS.hexrep(local_id.hash, False)
+    kotlin_cb.onStatusUpdate(f"Engine Ready. Addr: {addr}")
 
 def on_lxm_received(lxm):
     try:
         content = lxm.content.decode("utf-8")
-        # Process CSV Harvest Data
         if "harvester_id" in content:
             f = io.StringIO(content)
             reader = csv.DictReader(f)
@@ -57,5 +56,4 @@ def on_lxm_received(lxm):
                     int(row['timestamp'])
                 )
     except Exception as e:
-        if kotlin_cb:
-            kotlin_cb.onStatusUpdate(f"Data Error: {str(e)}")
+        if kotlin_cb: kotlin_cb.onStatusUpdate(f"Data Error: {str(e)}")
