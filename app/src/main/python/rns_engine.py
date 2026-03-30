@@ -33,14 +33,26 @@ def _mock_find_spec(name, package=None):
     return _orig_find_spec(name, package)
 importlib.util.find_spec = _mock_find_spec
 
-# --- 2. THE HIJACK ---
+# --- 2. THE GLOBAL PLATFORM HIJACK ---
+# We force the system to report as Linux to bypass Android-only hardware checks
 platform.system = lambda: "Linux"
 
-import RNS, LXMF
+import RNS
+
+# CRITICAL FIX: Manually override the Reticulum internal platform utility
+# This stops the "The android specific rnode interface must be used on android" error
+try:
+    import RNS.vendor.platformutils as pu
+    pu.is_android = lambda: False
+    print("RNS-LOG: Android Platform Check Hijacked Successfully")
+except:
+    pass
+
+import LXMF
 from LXMF import LXMRouter
 from RNS.Interfaces.Interface import Interface
 
-# Disable signals
+# Disable signals for Android
 signal.signal = lambda sig, handler: None
 
 # --- 3. PALM HARVEST ENGINE LOGIC ---
@@ -48,7 +60,6 @@ kotlin_cb = None
 router = None
 local_destination = None
 
-# FIX: Added 'radio_params_json' to match the 3 arguments sent by Kotlin
 def start_engine(service_obj, storage_path, radio_params_json=None):
     global kotlin_cb, router, local_destination
     kotlin_cb = service_obj
@@ -68,7 +79,6 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
         if not os.path.exists(id_path): local_id.to_file(id_path)
 
         router = LXMRouter(identity=local_id, storagepath=os.path.join(storage_path, ".lxmf"))
-        # Register local identity
         local_destination = router.register_delivery_identity(local_id, display_name="PalmReceiver")
         router.register_delivery_callback(on_lxmf)
         
@@ -80,6 +90,8 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
 def inject_rnode(radio_params_json):
     try:
         params = json.loads(radio_params_json)
+        
+        # We import the Universal RNodeInterface, NOT the Android one
         from RNS.Interfaces.RNodeInterface import RNodeInterface
         
         ictx = {
@@ -87,6 +99,7 @@ def inject_rnode(radio_params_json):
             "type": "RNodeInterface",
             "interface_enabled": True,
             "outgoing": True,
+            # We use 'socket' protocol to force pyserial to treat the bridge as raw serial
             "port": "socket://127.0.0.1:8001",
             "frequency": int(params.get("freq")),
             "bandwidth": int(params.get("bw")),
@@ -96,6 +109,7 @@ def inject_rnode(radio_params_json):
             "flow_control": False
         }
         
+        # Instantiate the Universal interface. Since is_android is False, this works!
         new_ifac = RNodeInterface(RNS.Transport, ictx)
         new_ifac.mode = Interface.MODE_FULL
         RNS.Transport.interfaces.append(new_ifac)
@@ -103,7 +117,7 @@ def inject_rnode(radio_params_json):
         time.sleep(1)
         if local_destination: local_destination.announce()
         
-        return f"Radio Active: {int(params.get('freq'))/1000000} MHz"
+        return f"Link Successful: {int(params.get('freq'))/1000000} MHz"
     except Exception as e:
         return f"Link Failed: {str(e)}"
 
