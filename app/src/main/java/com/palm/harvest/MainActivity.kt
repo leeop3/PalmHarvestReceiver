@@ -1,9 +1,20 @@
 package com.palm.harvest
 
+import android.Manifest
+import android.annotation.SuppressLint
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
 import android.content.*
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
-import android.os.IBinder
+import android.view.Menu
+import android.view.MenuItem
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import com.google.android.material.tabs.TabLayoutMediator
 import com.palm.harvest.databinding.ActivityMainBinding
 import com.palm.harvest.network.RNSReceiverService
@@ -15,16 +26,12 @@ import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
-    private var isServiceBound = false
 
-    private val serviceConnection = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-            isServiceBound = true
-            observeServiceStatus()
-        }
-        override fun onServiceDisconnected(name: ComponentName?) {
-            isServiceBound = false
-        }
+    private val btPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { perms ->
+        if (perms.values.all { it }) showDevicePicker()
+        else Toast.makeText(this, "Bluetooth permissions required", Toast.LENGTH_LONG).show()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -33,35 +40,66 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
         setSupportActionBar(binding.toolbar)
 
-        // FIX: Setting the adapter BEFORE attaching the TabLayoutMediator
         binding.viewPager.adapter = MainPagerAdapter(this)
-        
         TabLayoutMediator(binding.tabLayout, binding.viewPager) { tab, pos ->
             tab.text = if (pos == 0) "📡 Incoming" else "📊 Summary"
         }.attach()
 
         startAndBindService()
+        observeStatus()
+    }
+
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menu.add(0, 1, 0, "Connect RNode")
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        if (item.itemId == 1) {
+            requestBtPerms()
+            return true
+        }
+        return super.onOptionsItemSelected(item)
+    }
+
+    private fun requestBtPerms() {
+        val perms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+            arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
+        else
+            arrayOf(Manifest.permission.BLUETOOTH, Manifest.permission.BLUETOOTH_ADMIN, Manifest.permission.ACCESS_FINE_LOCATION)
+
+        if (perms.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED })
+            showDevicePicker()
+        else
+            btPermissionLauncher.launch(perms)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun showDevicePicker() {
+        val adapter = getSystemService(BluetoothManager::class.java)?.adapter
+        val paired = adapter?.bondedDevices?.toList() ?: emptyList()
+        if (paired.isEmpty()) {
+            Toast.makeText(this, "Pair RNode in Phone Settings first", Toast.LENGTH_LONG).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Select RNode")
+            .setItems(paired.map { it.name }.toTypedArray()) { _, i ->
+                val intent = Intent(this, RNSReceiverService::class.java).apply {
+                    action = RNSReceiverService.ACTION_CONNECT
+                    putExtra(RNSReceiverService.EXTRA_DEVICE, paired[i])
+                }
+                startService(intent)
+            }.show()
     }
 
     private fun startAndBindService() {
-        val intent = Intent(this, RNSReceiverService::class.java)
-        startService(intent)
-        bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+        startService(Intent(this, RNSReceiverService::class.java))
     }
 
-    private fun observeServiceStatus() {
+    private fun observeStatus() {
         CoroutineScope(Dispatchers.Main).launch {
-            RNSReceiverService.serviceStatus.collectLatest { status ->
-                binding.statusText.text = "Status: $status"
-            }
-        }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        if (isServiceBound) {
-            unbindService(serviceConnection)
-            isServiceBound = false
+            RNSReceiverService.serviceStatus.collectLatest { binding.statusText.text = it }
         }
     }
 }
