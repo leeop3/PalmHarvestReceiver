@@ -14,6 +14,7 @@ import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import com.palm.harvest.data.AppDatabase
 import com.palm.harvest.data.HarvestReport
+import com.palm.harvest.data.DiscoveredNode
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.io.IOException
@@ -62,22 +63,18 @@ class RNSReceiverService : Service() {
                 btSocket?.close()
                 tcpServer?.close()
                 
-                // 1. Setup Bluetooth Insecurely
                 val m = device.javaClass.getMethod("createInsecureRfcommSocket", Int::class.javaPrimitiveType)
                 btSocket = m.invoke(device, 1) as BluetoothSocket
                 btSocket?.connect()
                 
-                // 2. Setup TCP Server FIRST
                 tcpServer = ServerSocket()
                 tcpServer?.reuseAddress = true
                 tcpServer?.bind(InetSocketAddress("127.0.0.1", 7633))
                 
                 onStatusUpdate("Bridge 7633 Listening")
                 
-                // 3. Launch the Pipe Handlers in background
                 launch { handleTcpClients() }
 
-                // 4. NOW tell Python to inject
                 delay(500)
                 injectPythonInterface()
 
@@ -101,10 +98,9 @@ class RNSReceiverService : Service() {
                     val tcpIn = client.inputStream
                     val tcpOut = client.outputStream
 
-                    // BT -> TCP
                     launch {
                         val buf = ByteArray(2048)
-                        var r = 0 // FIX: Explicitly initialized to 0
+                        var r = 0
                         while (isActive && btIn.read(buf).also { r = it } != -1) {
                             if (r > 0) {
                                 tcpOut.write(buf, 0, r)
@@ -113,10 +109,9 @@ class RNSReceiverService : Service() {
                         }
                     }
 
-                    // TCP -> BT
                     launch {
                         val buf = ByteArray(2048)
-                        var r = 0 // FIX: Explicitly initialized to 0
+                        var r = 0
                         while (isActive && tcpIn.read(buf).also { r = it } != -1) {
                             if (r > 0) {
                                 btOut.write(buf, 0, r)
@@ -147,7 +142,12 @@ class RNSReceiverService : Service() {
         super.onCreate()
         createNotificationChannel()
         startForeground(1, createNotification("Starting RNS..."))
-        db = Room.databaseBuilder(applicationContext, AppDatabase::class.java, "harvest-db").fallbackToDestructiveMigration().build()
+        
+        // Destructive Migration included for the new Node schema
+        db = Room.databaseBuilder(applicationContext, AppDatabase::class.java, "harvest-db")
+            .fallbackToDestructiveMigration()
+            .build()
+            
         if (!Python.isStarted()) Python.start(AndroidPlatform(this))
         startRnsEngine()
     }
@@ -164,24 +164,19 @@ class RNSReceiverService : Service() {
         updateNotification(msg)
     }
 
-        fun onNodeDiscovered(hash: String, nickname: String) {
+    // Called by Python Discovery Handler
+    fun onNodeDiscovered(hash: String, nickname: String) {
         serviceScope.launch {
-            val node = com.palm.harvest.data.DiscoveredNode(hash, nickname, System.currentTimeMillis())
+            val node = DiscoveredNode(hash, nickname, System.currentTimeMillis())
             db.harvestDao().insertNode(node)
         }
     }
 
-        fun onNodeDiscovered(hash: String, nickname: String) {
-        serviceScope.launch {
-            val node = com.palm.harvest.data.DiscoveredNode(hash, nickname, System.currentTimeMillis())
-            db.harvestDao().insertNode(node)
-        }
-    }
-
+    // Called by Python LXMF Delivery Callback
     fun onHarvestReceived(id: String, hId: String, bId: String, ripe: Int, empty: Int, lat: Double, lon: Double, ts: Long, photo: String) {
         serviceScope.launch {
             val report = HarvestReport(id, hId, bId, ripe, empty, lat, lon, ts, photo)
-            db.harvestDao().insert(report)
+            db.harvestDao().insertReport(report) // FIX: Uses the correctly named insertReport method
         }
     }
 
