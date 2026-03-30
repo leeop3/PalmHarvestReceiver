@@ -1,66 +1,42 @@
-import os
-import sys
-import platform
-import time
-import csv
-import io
-import json
-import signal
+import os, sys, platform, time, csv, io, json, signal
 from types import ModuleType
-import importlib.util
-import importlib.machinery
+import importlib.util, importlib.machinery
 
 # --- 1. THE PLATFORM HIJACK ---
-# Force Reticulum to use the standard Linux/TCP driver instead of the Android hardware driver
 platform.system = lambda: "Linux"
 
 # --- 2. THE MODULE MOCKS ---
-# Prevent ImportErrors for Kivy/Android-only libraries that RNS looks for
-def mock_kivy_libs():
-    for lib_name in ["usbserial4a", "usb4a", "jnius"]:
-        if lib_name not in sys.modules:
-            mock = ModuleType(lib_name)
-            mock.__spec__ = importlib.machinery.ModuleSpec(lib_name, None)
-            
-            if lib_name == "usbserial4a":
-                mock.get_ports_list = lambda: []
-                mock.serial4a = ModuleType("serial4a")
-            if lib_name == "usb4a":
-                mock.usb = ModuleType("usb")
-                mock.usb.get_usb_device_list = lambda: []
-            if lib_name == "jnius":
-                class Dummy:
-                    def autoclass(self, name): return self
-                    def cast(self, x, y): return x
-                mock.autoclass = lambda x: Dummy()
-                mock.cast = lambda x, y: x
-                
-            sys.modules[lib_name] = mock
+def mock_module(name):
+    if name not in sys.modules:
+        mock = ModuleType(name)
+        mock.__spec__ = importlib.machinery.ModuleSpec(name, None)
+        if name == "usbserial4a": mock.get_ports_list = lambda: []
+        if name == "jnius":
+            class Dummy:
+                def autoclass(self, n): return self
+                def cast(self, x, y): return x
+            mock.autoclass = lambda x: Dummy()
+        if name == "usb4a":
+            mock.usb = ModuleType("usb")
+            mock.usb.get_usb_device_list = lambda: []
+        sys.modules[name] = mock
+mock_module("usbserial4a"); mock_module("usb4a"); mock_module("jnius")
 
-mock_kivy_libs()
-
-# Override find_spec to satisfy internal RNS importlib calls
-_orig_find_spec = importlib.util.find_spec
-def _mock_find_spec(name, package=None):
-    if name in ["usbserial4a", "jnius", "usb4a"]:
-        return sys.modules[name].__spec__
-    return _orig_find_spec(name, package)
-importlib.util.find_spec = _mock_find_spec
-
-# --- 3. IMPORT RNS & HIJACK INTERNAL UTILS ---
+# --- 3. THE NAMESPACE HIJACK (CRITICAL) ---
 import RNS
-import LXMF
+# Forcefully replace the Android-specific RNodeInterface with the Standard one
+try:
+    import RNS.Interfaces.RNodeInterface as StandardRNode
+    import RNS.Interfaces.Android.RNodeInterface as AndroidRNode
+    # Overwrite the Android class with the Standard class
+    RNS.Interfaces.Android.RNodeInterface.RNodeInterface = StandardRNode.RNodeInterface
+    print("RNS-LOG: Namespace Hijack Successful")
+except Exception as e:
+    print(f"RNS-LOG: Hijack Note: {e}")
+
 from LXMF import LXMRouter
 from RNS.Interfaces.Interface import Interface
 
-# Force internal Reticulum check to return False for Android
-try:
-    import RNS.vendor.platformutils as pu
-    pu.is_android = lambda: False
-except:
-    pass
-
-# Disable signals for Android compatibility
 signal.signal = lambda sig, handler: None
 
 # --- 4. ENGINE LOGIC ---
@@ -75,14 +51,12 @@ def start_engine(service_obj, storage_path, radio_params_json):
     rns_dir = os.path.join(storage_path, ".reticulum")
     if not os.path.exists(rns_dir): os.makedirs(rns_dir)
     
-    # Empty config to prevent boot-time hardware checks
-    config = "[reticulum]\nenable_transport = True\nshare_instance = Yes\n\n[interfaces]"
-    with open(os.path.join(rns_dir, "config"), "w") as f_out:
-        f_out.write(config)
+    # Clean config
+    with open(os.path.join(rns_dir, "config"), "w") as f:
+        f.write("[reticulum]\nenable_transport = True\n\n[interfaces]")
 
     try:
         RNS.Reticulum(configdir=rns_dir)
-        
         id_path = os.path.join(storage_path, "storage_identity")
         local_id = RNS.Identity.from_file(id_path) if os.path.exists(id_path) else RNS.Identity()
         if not os.path.exists(id_path): local_id.to_file(id_path)
@@ -90,17 +64,15 @@ def start_engine(service_obj, storage_path, radio_params_json):
         router = LXMRouter(identity=local_id, storagepath=storage_path)
         router.register_delivery_callback(lambda lxm: on_lxmf(lxm, service_obj))
         
-        addr = RNS.hexrep(local_id.hash, False)
-        service_obj.onStatusUpdate(f"RNS Online: {addr}")
+        service_obj.onStatusUpdate(f"RNS Online: {RNS.hexrep(local_id.hash, False)}")
     except Exception as e:
-        service_obj.onStatusUpdate(f"RNS Init Error: {str(e)}")
+        service_obj.onStatusUpdate(f"Init Error: {str(e)}")
 
 def inject_rnode(radio_params_json):
-    # Called by Kotlin once the Bluetooth bridge (ServerSocket) is ready
-    params = json.loads(radio_params_json)
+    # This calls the HIJACKED driver which works perfectly with TCP
     try:
-        # We use the standard RNodeInterface which now handles TCP sockets natively 
-        # because we hijacked the platform as "Linux"
+        params = json.loads(radio_params_json)
+        # Use the standard interface class (which we hijacked into the namespace)
         from RNS.Interfaces.RNodeInterface import RNodeInterface
         
         ictx = {
@@ -108,11 +80,11 @@ def inject_rnode(radio_params_json):
             "type": "RNodeInterface",
             "enabled": True,
             "port": "tcp://127.0.0.1:8001",
-            "frequency": params.get("freq", 915000000),
-            "bandwidth": params.get("bw", 125000),
-            "txpower": params.get("tx", 20),
-            "spreadingfactor": params.get("sf", 7),
-            "codingrate": params.get("cr", 5),
+            "frequency": params.get("freq") or 915000000,
+            "bandwidth": params.get("bw") or 125000,
+            "txpower": params.get("tx") or 20,
+            "spreadingfactor": params.get("sf") or 7,
+            "codingrate": params.get("cr") or 5,
             "flow_control": False
         }
         
@@ -121,7 +93,7 @@ def inject_rnode(radio_params_json):
         RNS.Transport.interfaces.append(ifac)
         return f"Interface Injected: {params.get('freq')/1000000} MHz"
     except Exception as e:
-        return f"Injection Failed: {str(e)}"
+        return f"Injection Error: {str(e)}"
 
 def on_lxmf(lxm, service_obj):
     try:
