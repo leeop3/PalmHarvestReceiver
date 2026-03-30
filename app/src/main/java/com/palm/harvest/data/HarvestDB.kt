@@ -1,4 +1,5 @@
 package com.palm.harvest.data
+import android.content.Context
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
 
@@ -37,15 +38,7 @@ interface HarvestDao {
     @Query("SELECT * FROM harvest_reports ORDER BY timestamp DESC")
     fun getAllReports(): Flow<List<HarvestReport>>
 
-    @Query("""
-        SELECT blockId, 
-               SUM(ripeBunches) as totalRipe, 
-               SUM(emptyBunches) as totalEmpty, 
-               SUM(ripeBunches + emptyBunches) as totalBunches 
-        FROM harvest_reports 
-        GROUP BY blockId 
-        ORDER BY blockId ASC
-    """)
+    @Query("SELECT blockId, SUM(ripeBunches) as totalRipe, SUM(emptyBunches) as totalEmpty, SUM(ripeBunches + emptyBunches) as totalBunches FROM harvest_reports GROUP BY blockId ORDER BY blockId ASC")
     fun getBlockSummaries(): Flow<List<BlockSummary>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -58,4 +51,21 @@ interface HarvestDao {
 @Database(entities = [HarvestReport::class, DiscoveredNode::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun harvestDao(): HarvestDao
+
+    companion object {
+        @Volatile
+        private var INSTANCE: AppDatabase? = null
+
+        fun getDatabase(context: Context): AppDatabase {
+            return INSTANCE ?: synchronized(this) {
+                val instance = Room.databaseBuilder(
+                    context.applicationContext,
+                    AppDatabase::class.java,
+                    "harvest-db"
+                ).fallbackToDestructiveMigration().build()
+                INSTANCE = instance
+                instance
+            }
+        }
+    }
 }
