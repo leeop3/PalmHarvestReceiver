@@ -19,6 +19,7 @@ import com.google.android.material.tabs.TabLayoutMediator
 import com.palm.harvest.databinding.ActivityMainBinding
 import com.palm.harvest.network.RNSReceiverService
 import com.palm.harvest.ui.MainPagerAdapter
+import com.palm.harvest.ui.RadioSettingsDialog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
@@ -40,6 +41,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
         setSupportActionBar(binding.toolbar)
 
+        // Setup ViewPager and Tabs
         binding.viewPager.adapter = MainPagerAdapter(this)
         TabLayoutMediator(binding.tabLayout, binding.viewPager) { tab, pos ->
             tab.text = if (pos == 0) "📡 Incoming" else "📊 Summary"
@@ -49,20 +51,24 @@ class MainActivity : AppCompatActivity() {
         observeStatus()
     }
 
-    override fun onOptionsItemSelected(item: MenuItem): Boolean {
-    return when (item.itemId) {
-        1 -> { requestBtPerms(); true }
-        2 -> { RadioSettingsDialog().show(supportFragmentManager, "settings"); true }
-        else -> super.onOptionsItemSelected(item)
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menu.add(0, 1, 0, "Connect RNode")
+        menu.add(0, 2, 1, "Radio Settings")
+        return true
     }
-}
 
-override fun onCreateOptionsMenu(menu: Menu): Boolean {
-    menu.add(0, 1, 0, "Connect RNode")
-    menu.add(0, 2, 0, "Radio Settings") // New Settings Button
-    return true
-}
-        return super.onOptionsItemSelected(item)
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        return when (item.itemId) {
+            1 -> {
+                requestBtPerms()
+                true
+            }
+            2 -> {
+                RadioSettingsDialog().show(supportFragmentManager, "radio_settings")
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
+        }
     }
 
     private fun requestBtPerms() {
@@ -97,12 +103,15 @@ override fun onCreateOptionsMenu(menu: Menu): Boolean {
     }
 
     private fun startAndBindService() {
-        startService(Intent(this, RNSReceiverService::class.java))
+        val intent = Intent(this, RNSReceiverService::class.java)
+        startService(intent)
     }
 
     private fun observeStatus() {
         CoroutineScope(Dispatchers.Main).launch {
-            RNSReceiverService.serviceStatus.collectLatest { binding.statusText.text = it }
+            RNSReceiverService.serviceStatus.collectLatest { status ->
+                binding.statusText.text = status
+            }
         }
     }
 }
