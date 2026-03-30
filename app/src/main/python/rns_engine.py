@@ -1,33 +1,32 @@
-import sys
+import sys, os, csv, io, json, signal
 from types import ModuleType
 
-# --- ANDROID MOCK FIX ---
-# Reticulum looks for these on Android. We mock them to bypass the USB check 
-# since we are using a TCP bridge for Bluetooth.
+# --- ANDROID MOCKS ---
 mock_usb = ModuleType("usbserial4a")
 mock_usb.serial4a = ModuleType("serial4a")
 mock_usb.get_ports_list = lambda: []
 sys.modules["usbserial4a"] = mock_usb
-
 mock_jnius = ModuleType("jnius")
 mock_jnius.autoclass = lambda x: None
 sys.modules["jnius"] = mock_jnius
 
-import signal
 signal.signal = lambda sig, handler: None
-import RNS, LXMF, os, csv, io
+import RNS, LXMF
 from LXMF import LXMRouter
 
-def start_engine(service_obj, storage_path, radio_params_java):
-    radio_params = dict(radio_params_java)
+def start_engine(service_obj, storage_path, radio_params_json):
+    # 1. Parse the JSON string into a native Python Dictionary
+    # This completely eliminates the "LinkedHashMap not iterable" error.
+    params = json.loads(radio_params_json)
+    
     rns_dir = os.path.join(storage_path, ".reticulum")
     if not os.path.exists(rns_dir): os.makedirs(rns_dir)
     
-    freq = radio_params.get("freq") or 915000000
-    bw   = radio_params.get("bw")   or 125000
-    tx   = radio_params.get("tx")   or 20
-    sf   = radio_params.get("sf")   or 7
-    cr   = radio_params.get("cr")   or 5
+    f  = params.get("freq", 915000000)
+    bw = params.get("bw", 125000)
+    tx = params.get("tx", 20)
+    sf = params.get("sf", 7)
+    cr = params.get("cr", 5)
 
     config = f"""
 [reticulum]
@@ -38,20 +37,18 @@ share_instance = Yes
   [[RNode Interface]]
     type = RNodeInterface
     enabled = True
-    # Connectivity via the Kotlin TCP Bridge
     port = tcp://127.0.0.1:8001
-    frequency = {freq}
+    frequency = {f}
     bandwidth = {bw}
     txpower = {tx}
     spreadingfactor = {sf}
     codingrate = {cr}
     flow_control = False
 """
-    with open(os.path.join(rns_dir, "config"), "w") as f:
-        f.write(config)
+    with open(os.path.join(rns_dir, "config"), "w") as f_out:
+        f_out.write(config)
 
     try:
-        # Initialize Reticulum
         RNS.Reticulum(configdir=rns_dir)
         
         id_path = os.path.join(storage_path, "storage_identity")
@@ -70,8 +67,8 @@ def on_lxm(lxm, service_obj):
     try:
         content = lxm.content.decode("utf-8")
         if "harvester_id" in content:
-            f = io.StringIO(content)
-            reader = csv.DictReader(f)
+            f_io = io.StringIO(content)
+            reader = csv.DictReader(f_io)
             for row in reader:
                 service_obj.onHarvestReceived(
                     row['id'], row['harvester_id'], row['block_id'],

@@ -19,6 +19,7 @@ import java.io.IOException
 import java.net.ServerSocket
 import java.util.*
 import androidx.room.Room
+import org.json.JSONObject
 
 class RNSReceiverService : Service() {
     private val binder = LocalBinder()
@@ -108,20 +109,19 @@ class RNSReceiverService : Service() {
             val py = Python.getInstance()
             val prefs = getSharedPreferences("radio_settings", Context.MODE_PRIVATE)
             
-            // Collect Radio Params into a Map for Python
-            val radioParams = mutableMapOf<String, Any>()
-            radioParams["freq"] = prefs.getInt("freq", 915000000)
-            radioParams["bw"] = prefs.getInt("bw", 125000)
-            radioParams["tx"] = prefs.getInt("tx", 20)
-            radioParams["sf"] = prefs.getInt("sf", 7)
-            radioParams["cr"] = prefs.getInt("cr", 5)
+            // Create a JSON string to pass to Python (The Safest Way)
+            val json = JSONObject()
+            json.put("freq", prefs.getInt("freq", 915000000))
+            json.put("bw", prefs.getInt("bw", 125000))
+            json.put("tx", prefs.getInt("tx", 20))
+            json.put("sf", prefs.getInt("sf", 7))
+            json.put("cr", prefs.getInt("cr", 5))
 
-            // FIX: Calling with 3 arguments now
             py.getModule("rns_engine").callAttr(
                 "start_engine", 
                 this@RNSReceiverService, 
                 filesDir.absolutePath,
-                radioParams
+                json.toString() // PASSING STRING INSTEAD OF MAP
             )
         }
     }
