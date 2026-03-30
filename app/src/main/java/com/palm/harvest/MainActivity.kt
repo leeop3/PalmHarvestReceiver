@@ -1,129 +1,94 @@
 package com.palm.harvest
 
 import android.Manifest
-import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothDevice
-import android.bluetooth.BluetoothManager
-import android.bluetooth.BluetoothSocket
-import android.content.pm.PackageManager
-import android.os.Build
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.location.Location
 import android.os.Bundle
-import android.util.Log
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.TextView
-import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
+import android.provider.MediaStore
+import android.util.Base64
+import android.widget.*
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
-import java.io.IOException
-import java.net.ServerSocket
+import com.google.android.gms.location.LocationServices
+import java.io.ByteArrayOutputStream
 import java.util.*
 import kotlin.concurrent.thread
 
 class MainActivity : AppCompatActivity() {
+    private var photoB64: String = ""
+    private var lastLocation: Location? = null
     private lateinit var statusText: TextView
-    private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
-    private var btSocket: BluetoothSocket? = null
+
+    // Camera Launcher
+    private val takePhoto = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == RESULT_OK) {
+            val imageBitmap = result.data?.extras?.get("data") as Bitmap
+            // Compress to tiny thumbnail (150x150) for LoRa efficiency
+            val scaled = Bitmap.createScaledBitmap(imageBitmap, 150, 150, false)
+            val baos = ByteArrayOutputStream()
+            scaled.compress(Bitmap.CompressFormat.WEBP, 50, baos)
+            photoB64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+            Toast.makeText(this, "Photo Captured & Compressed", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        val layout = LinearLayout(this).apply { 
-            orientation = LinearLayout.VERTICAL 
-            setPadding(50, 50, 50, 50)
+        val layout = ScrollView(this).apply {
+            val inner = LinearLayout(context).apply { 
+                orientation = LinearLayout.VERTICAL
+                setPadding(40, 40, 40, 40)
+            }
+            addView(inner)
         }
+        val container = (layout.getChildAt(0) as LinearLayout)
+
+        statusText = TextView(this).apply { text = "RNS Status: Starting..." }
+        val editBaseStation = EditText(this).apply { hint = "Base Station Hex Address" }
+        val editHarvester = EditText(this).apply { hint = "Harvester ID" }
+        val editBlock = EditText(this).apply { hint = "Block ID" }
+        val editRipe = EditText(this).apply { hint = "Ripe Bunches"; inputType = android.text.InputType.TYPE_CLASS_NUMBER }
         
-        statusText = TextView(this).apply { text = "Initializing..." ; textSize = 18f }
-        val connectBtn = Button(this).apply { text = "Connect RNode (Bluetooth)" }
-        
-        layout.addView(statusText)
-        layout.addView(connectBtn)
+        val btnPhoto = Button(this).apply { text = "Snap Photo" }
+        val btnSubmit = Button(this).apply { text = "SUBMIT GRADE" }
+
+        container.addView(statusText)
+        container.addView(editBaseStation); container.addView(editHarvester)
+        container.addView(editBlock); container.addView(editRipe)
+        container.addView(btnPhoto); container.addView(btnSubmit)
         setContentView(layout)
 
-        connectBtn.setOnClickListener { checkPermissionsAndShowDevices() }
-
-        if (!Python.isStarted()) Python.start(AndroidPlatform(this))
-        
-        thread {
-            try {
-                val py = Python.getInstance()
-                val rnsModule = py.getModule("rns_engine")
-                rnsModule.callAttr("start_engine", this, filesDir.absolutePath)
-            } catch (e: Exception) { Log.e("PalmHarvest", "Python: ${e.message}") }
-        }
-    }
-
-    private fun checkPermissionsAndShowDevices() {
-        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.ACCESS_FINE_LOCATION)
-        } else {
-            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        // Init GPS
+        val fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
+        btnPhoto.setOnClickListener { 
+            takePhoto.launch(Intent(MediaStore.ACTION_IMAGE_CAPTURE))
+            fusedLocationClient.lastLocation.addOnSuccessListener { lastLocation = it }
         }
 
-        if (permissions.any { ActivityCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }) {
-            ActivityCompat.requestPermissions(this, permissions, 1)
-        } else {
-            showPairedDevices()
-        }
-    }
-
-    private fun showPairedDevices() {
-        val btManager = getSystemService(BluetoothManager::class.java)
-        val pairedDevices = btManager.adapter.bondedDevices
-        val deviceNames = pairedDevices.map { it.name ?: it.address }.toTypedArray()
-        
-        AlertDialog.Builder(this)
-            .setTitle("Select RNode")
-            .setItems(deviceNames) { _, which ->
-                val device = pairedDevices.elementAt(which)
-                startBluetoothBridge(device)
-            }.show()
-    }
-
-    private fun startBluetoothBridge(device: BluetoothDevice) {
-        thread {
-            try {
-                btSocket = device.createRfcommSocketToServiceRecord(SPP_UUID)
-                btSocket?.connect()
-                onStatusUpdate("BT Connected to ${device.name}")
-                
-                val serverSocket = ServerSocket(8001)
-                onStatusUpdate("Bridge Port 8001 Open")
-                
-                val client = serverSocket.accept()
-                
-                val btIn = btSocket!!.inputStream
-                val btOut = btSocket!!.outputStream
-                val tcpIn = client.inputStream
-                val tcpOut = client.outputStream
-
-                // Thread 1: Bluetooth -> TCP
-                thread {
-                    val buf = ByteArray(1024)
-                    while (true) {
-                        val len = btIn.read(buf)
-                        if (len > 0) tcpOut.write(buf, 0, len)
-                    }
+        btnSubmit.setOnClickListener {
+            val csv = "${System.currentTimeMillis()},${editHarvester.text},${editBlock.text},${editRipe.text},0," +
+                      "${lastLocation?.latitude ?: 0.0},${lastLocation?.longitude ?: 0.0},${System.currentTimeMillis()/1000},$photoB64"
+            
+            thread {
+                try {
+                    val py = Python.getInstance()
+                    val rns = py.getModule("rns_engine")
+                    val result = rns.callAttr("send_report", editBaseStation.text.toString(), csv)
+                    runOnUiThread { Toast.makeText(this, "Sent: $result", Toast.LENGTH_SHORT).show() }
+                } catch (e: Exception) {
+                    runOnUiThread { statusText.text = "Error: ${e.message}" }
                 }
-                
-                // Thread 2: TCP -> Bluetooth
-                val buf = ByteArray(1024)
-                while (true) {
-                    val len = tcpIn.read(buf)
-                    if (len > 0) btOut.write(buf, 0, len)
-                }
-
-            } catch (e: Exception) {
-                runOnUiThread { Toast.makeText(this, "BT Error: ${e.message}", Toast.LENGTH_LONG).show() }
             }
         }
+
+        if (!Python.isStarted()) Python.start(AndroidPlatform(this))
+        thread { Python.getInstance().getModule("rns_engine").callAttr("start_engine", this, filesDir.absolutePath) }
     }
 
-    fun onStatusUpdate(msg: String) { runOnUiThread { statusText.text = "Status: $msg" } }
-    fun onHarvestReceived(id: String, hId: String, bId: String, ripe: Int, empty: Int, lat: Double, lon: Double, ts: Long) {
-        runOnUiThread { statusText.append("\n\nReport: $hId | Ripe: $ripe") }
-    }
+    fun onStatusUpdate(msg: String) { runOnUiThread { statusText.text = msg } }
 }
