@@ -2,10 +2,11 @@ import os, sys, platform, time, csv, io, json, signal
 from types import ModuleType
 import importlib.util, importlib.machinery
 
-# --- 1. THE PLATFORM HIJACK ---
+# --- 1. THE GLOBAL HIJACK ---
+# Kill the Android flag before Reticulum even wakes up
 platform.system = lambda: "Linux"
 
-# --- 2. THE MODULE MOCKS ---
+# --- 2. DEEP MOCKS ---
 def mock_module(name):
     if name not in sys.modules:
         mock = ModuleType(name)
@@ -22,19 +23,19 @@ def mock_module(name):
         sys.modules[name] = mock
 mock_module("usbserial4a"); mock_module("usb4a"); mock_module("jnius")
 
-# --- 3. THE NAMESPACE HIJACK (CRITICAL) ---
+# --- 3. IMPORT RNS & DISABLE ANDROID VALIDATION ---
 import RNS
-# Forcefully replace the Android-specific RNodeInterface with the Standard one
+# Forcefully tell Reticulum it is NOT on Android
 try:
-    import RNS.Interfaces.RNodeInterface as StandardRNode
-    import RNS.Interfaces.Android.RNodeInterface as AndroidRNode
-    # Overwrite the Android class with the Standard class
-    RNS.Interfaces.Android.RNodeInterface.RNodeInterface = StandardRNode.RNodeInterface
-    print("RNS-LOG: Namespace Hijack Successful")
-except Exception as e:
-    print(f"RNS-LOG: Hijack Note: {e}")
+    import RNS.vendor.platformutils as pu
+    pu.is_android = lambda: False
+except:
+    pass
 
+import LXMF
 from LXMF import LXMRouter
+# IMPORTANT: Explicitly import the Universal/Linux RNodeInterface
+from RNS.Interfaces.RNodeInterface import RNodeInterface
 from RNS.Interfaces.Interface import Interface
 
 signal.signal = lambda sig, handler: None
@@ -42,16 +43,15 @@ signal.signal = lambda sig, handler: None
 # --- 4. ENGINE LOGIC ---
 kotlin_cb = None
 router = None
-local_id = None
 
 def start_engine(service_obj, storage_path, radio_params_json):
-    global kotlin_cb, router, local_id
+    global kotlin_cb, router
     kotlin_cb = service_obj
     
     rns_dir = os.path.join(storage_path, ".reticulum")
     if not os.path.exists(rns_dir): os.makedirs(rns_dir)
     
-    # Clean config
+    # Empty config - we inject everything manually
     with open(os.path.join(rns_dir, "config"), "w") as f:
         f.write("[reticulum]\nenable_transport = True\n\n[interfaces]")
 
@@ -66,18 +66,17 @@ def start_engine(service_obj, storage_path, radio_params_json):
         
         service_obj.onStatusUpdate(f"RNS Online: {RNS.hexrep(local_id.hash, False)}")
     except Exception as e:
-        service_obj.onStatusUpdate(f"Init Error: {str(e)}")
+        service_obj.onStatusUpdate(f"RNS Init Error: {str(e)}")
 
 def inject_rnode(radio_params_json):
-    # This calls the HIJACKED driver which works perfectly with TCP
     try:
         params = json.loads(radio_params_json)
-        # Use the standard interface class (which we hijacked into the namespace)
-        from RNS.Interfaces.RNodeInterface import RNodeInterface
         
+        # We define a "Ghost" config. 
+        # By not calling Transport.synthesize_interface, we skip the Android validator.
         ictx = {
-            "name": "RNode-Bridge",
-            "type": "RNodeInterface",
+            "name": "RNode-Mesh",
+            "type": "RNodeInterface", # We keep this for internal RNS logic
             "enabled": True,
             "port": "tcp://127.0.0.1:8001",
             "frequency": params.get("freq") or 915000000,
@@ -88,10 +87,15 @@ def inject_rnode(radio_params_json):
             "flow_control": False
         }
         
+        # Manual Instantiation of the Universal Driver
+        # This bypasses the synthesized check that throws the "invalid interface" error
         ifac = RNodeInterface(RNS.Transport, ictx)
         ifac.mode = Interface.MODE_FULL
+        
+        # Add directly to the transport stack
         RNS.Transport.interfaces.append(ifac)
-        return f"Interface Injected: {params.get('freq')/1000000} MHz"
+        
+        return f"RNode Active: {params.get('freq')/1000000} MHz"
     except Exception as e:
         return f"Injection Error: {str(e)}"
 
