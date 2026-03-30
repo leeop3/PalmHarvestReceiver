@@ -29,12 +29,11 @@ try:
     pu.is_android = lambda: False
 except: pass
 
-# --- 3. FIX PYSERIAL PROTOCOL HANDLERS ---
-# This is the missing piece. It forces pyserial to recognize "socket://" URLs
+# Explicitly load pyserial socket handler
 try:
     import serial.urlhandler.protocol_socket
-except ImportError:
-    print("RNS-LOG: Warning - could not explicitly load pyserial socket handler")
+except:
+    pass
 
 from LXMF import LXMRouter
 from RNS.Interfaces.RNodeInterface import RNodeInterface
@@ -54,10 +53,13 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
         f.write("[reticulum]\nenable_transport = True\n\n[interfaces]\n")
 
     try:
+        # Extreme logging to help find the port issue
         RNS.Reticulum(configdir=rns_dir, loglevel=RNS.LOG_DEBUG)
-        id_path = os.path.join(rns_dir, "storage_identity")
+        
+        id_path = os.path.join(storage_path, "storage_identity")
         local_id = RNS.Identity.from_file(id_path) if os.path.exists(id_path) else RNS.Identity()
         if not os.path.exists(id_path): local_id.to_file(id_path)
+        
         router = LXMRouter(identity=local_id, storagepath=os.path.join(storage_path, ".lxmf"))
         local_destination = router.register_delivery_identity(local_id, display_name="PalmReceiver")
         router.register_delivery_callback(on_lxmf)
@@ -68,15 +70,17 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
 def inject_rnode(radio_params_json):
     try:
         params = json.loads(radio_params_json)
-        print("RNS-LOG: Step 1 - Preparing Config")
         
-        # We provide a valid URL string to the 'port' key.
-        # pyserial will use the socket handler we imported above.
+        # Define the bridge URL
+        target_port = "socket://127.0.0.1:8001"
+        
+        # Define the configuration dictionary
+        # We use lowercase 'port' and a forced string type
         ictx = {
             "name": "RNode-Bridge",
             "type": "RNodeInterface",
             "enabled": True,
-            "port": "socket://127.0.0.1:8001", 
+            "port": str(target_port),
             "frequency": int(params.get("freq")),
             "bandwidth": int(params.get("bw")),
             "txpower": int(params.get("tx")),
@@ -85,17 +89,22 @@ def inject_rnode(radio_params_json):
             "flow_control": False
         }
         
-        print("RNS-LOG: Step 2 - Creating Interface Object")
+        print(f"RNS-LOG: Injecting RNode on {ictx['port']}")
+        
+        # Instantiate the interface directly
         ifac = RNodeInterface(RNS.Transport, ictx)
         
-        print("RNS-LOG: Step 3 - Registering Interface")
+        # Manually set the mode and register it
         ifac.mode = Interface.MODE_FULL
         RNS.Transport.interfaces.append(ifac)
         
         if local_destination: local_destination.announce()
-        return "RNode Link Active"
+        return "RNode Active"
     except Exception as e:
         print(f"RNS-LOG: Injection Failed: {str(e)}")
+        # If it fails, let's see exactly what keys were in the dict
+        try: print(f"RNS-LOG: Keys present: {list(ictx.keys())}")
+        except: pass
         return f"Link Error: {str(e)}"
 
 def on_lxmf(lxm):
