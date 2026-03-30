@@ -59,7 +59,7 @@ class RNSReceiverService : Service() {
                 onStatusUpdate("Connecting to ${device.name}...")
                 btSocket = device.createRfcommSocketToServiceRecord(SPP_UUID)
                 btSocket?.connect()
-                onStatusUpdate("Connected to RNode")
+                onStatusUpdate("BT Connected. Starting Bridge...")
                 startTcpBridge()
             } catch (e: IOException) {
                 onStatusUpdate("BT Connection Failed")
@@ -71,27 +71,49 @@ class RNSReceiverService : Service() {
         serviceScope.launch(Dispatchers.IO) {
             try {
                 val serverSocket = ServerSocket(8001)
+                
+                // IMPORTANT: Tell Python to inject the interface NOW that the server is ready
+                injectPythonInterface()
+
                 val client = serverSocket.accept()
                 val btIn = btSocket!!.inputStream
                 val btOut = btSocket!!.outputStream
                 val tcpIn = client.inputStream
                 val tcpOut = client.outputStream
 
+                onStatusUpdate("Mesh Bridge Active")
+
                 launch {
-                    val buffer = ByteArray(1024)
+                    val buffer = ByteArray(2048)
                     while (isActive) {
                         val len = btIn.read(buffer)
                         if (len > 0) tcpOut.write(buffer, 0, len)
                     }
                 }
-                val buffer = ByteArray(1024)
+                val buffer = ByteArray(2048)
                 while (isActive) {
                     val len = tcpIn.read(buffer)
                     if (len > 0) btOut.write(buffer, 0, len)
                 }
             } catch (e: Exception) {
-                onStatusUpdate("Bridge Closed")
+                onStatusUpdate("Bridge Error: ${e.message}")
             }
+        }
+    }
+
+    private fun injectPythonInterface() {
+        serviceScope.launch {
+            val py = Python.getInstance()
+            val prefs = getSharedPreferences("radio_settings", Context.MODE_PRIVATE)
+            val json = JSONObject()
+            json.put("freq", prefs.getInt("freq", 915000000))
+            json.put("bw", prefs.getInt("bw", 125000))
+            json.put("tx", prefs.getInt("tx", 20))
+            json.put("sf", prefs.getInt("sf", 7))
+            json.put("cr", prefs.getInt("cr", 5))
+            
+            val result = py.getModule("rns_engine").callAttr("inject_rnode", json.toString())
+            onStatusUpdate(result.toString())
         }
     }
 
@@ -108,21 +130,9 @@ class RNSReceiverService : Service() {
         serviceScope.launch {
             val py = Python.getInstance()
             val prefs = getSharedPreferences("radio_settings", Context.MODE_PRIVATE)
-            
-            // Create a JSON string to pass to Python (The Safest Way)
             val json = JSONObject()
             json.put("freq", prefs.getInt("freq", 915000000))
-            json.put("bw", prefs.getInt("bw", 125000))
-            json.put("tx", prefs.getInt("tx", 20))
-            json.put("sf", prefs.getInt("sf", 7))
-            json.put("cr", prefs.getInt("cr", 5))
-
-            py.getModule("rns_engine").callAttr(
-                "start_engine", 
-                this@RNSReceiverService, 
-                filesDir.absolutePath,
-                json.toString() // PASSING STRING INSTEAD OF MAP
-            )
+            py.getModule("rns_engine").callAttr("start_engine", this@RNSReceiverService, filesDir.absolutePath, json.toString())
         }
     }
 

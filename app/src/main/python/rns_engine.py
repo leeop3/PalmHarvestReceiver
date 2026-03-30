@@ -2,50 +2,31 @@ import sys, os, csv, io, json, signal, time
 from types import ModuleType
 import importlib.util, importlib.machinery
 
-# --- THE LENGTH-AWARE DUMMY MOCK ---
+# --- THE MOCK FIXES ---
 class Dummy:
     def __init__(self, name):
         self.__name__ = name
         self.__spec__ = importlib.machinery.ModuleSpec(name, None)
-    
-    def __getattr__(self, name): 
-        # If Reticulum asks for these specific list-producers, return a real empty list
-        if name in ["get_usb_device_list", "get_ports_list", "list_dialout_group"]:
-            return lambda: []
-        return self
-    
-    def __call__(self, *args, **kwargs): 
-        return self
-    
-    def __len__(self):
-        # Fixes the "object of type 'Dummy' has no len()" error
-        return 0
-    
-    def __getitem__(self, index):
-        # Allows iteration if Reticulum tries to loop over a mock result
-        return self
+    def __getattr__(self, name): return self
+    def __call__(self, *args, **kwargs): return self
+    def __len__(self): return 0
+    def __getitem__(self, index): return self
 
 def mock_module(name):
     mock = Dummy(name)
     sys.modules[name] = mock
     return mock
 
-# 1. Mock usbserial4a
 usbserial_mock = mock_module("usbserial4a")
 usbserial_mock.serial4a = Dummy("serial4a")
-
-# 2. Mock jnius
 jnius_mock = mock_module("jnius")
 jnius_mock.autoclass = lambda x: Dummy("DummyClass")
 jnius_mock.cast = lambda x, y: x
-
-# 3. Mock usb4a and the deep 'usb' submodule
 usb4a_mock = mock_module("usb4a")
 usb4a_inner = Dummy("usb4a.usb") 
 usb4a_mock.usb = usb4a_inner
 sys.modules["usb4a.usb"] = usb4a_inner
 
-# 4. Overload find_spec to satisfy importlib
 _orig_find_spec = importlib.util.find_spec
 def _mock_find_spec(name, package=None):
     if name in ["usbserial4a", "jnius", "usb4a", "usb4a.usb"]:
@@ -55,44 +36,30 @@ importlib.util.find_spec = _mock_find_spec
 
 # --- RNS ENGINE ---
 signal.signal = lambda sig, handler: None
-
 import RNS, LXMF
 from LXMF import LXMRouter
+from RNS.Interfaces.Android.RNodeInterface import RNodeInterface
+
+kotlin_cb = None
+router = None
+local_id = None
+storage = None
 
 def start_engine(service_obj, storage_path, radio_params_json):
-    params = json.loads(radio_params_json)
+    global kotlin_cb, router, local_id, storage
+    kotlin_cb = service_obj
+    storage = storage_path
+    
     rns_dir = os.path.join(storage_path, ".reticulum")
     if not os.path.exists(rns_dir): os.makedirs(rns_dir)
     
-    f  = params.get("freq", 915000000)
-    bw = params.get("bw", 125000)
-    tx = params.get("tx", 20)
-    sf = params.get("sf", 7)
-    cr = params.get("cr", 5)
-
-    config = f"""
-[reticulum]
-enable_transport = True
-share_instance = Yes
-
-[interfaces]
-  [[RNode Interface]]
-    type = RNodeInterface
-    enabled = True
-    port = tcp://127.0.0.1:8001
-    frequency = {f}
-    bandwidth = {bw}
-    txpower = {tx}
-    spreadingfactor = {sf}
-    codingrate = {cr}
-    flow_control = False
-"""
+    # Start with NO interfaces in config to prevent the reconnect loop
+    config = "[reticulum]\nenable_transport = True\nshare_instance = Yes\n\n[interfaces]"
     with open(os.path.join(rns_dir, "config"), "w") as f_out:
         f_out.write(config)
 
     try:
         RNS.Reticulum(configdir=rns_dir)
-        
         id_path = os.path.join(storage_path, "storage_identity")
         local_id = RNS.Identity.from_file(id_path) if os.path.exists(id_path) else RNS.Identity()
         if not os.path.exists(id_path): local_id.to_file(id_path)
@@ -104,6 +71,30 @@ share_instance = Yes
         service_obj.onStatusUpdate(f"RNS Online: {addr}")
     except Exception as e:
         service_obj.onStatusUpdate(f"RNS Error: {str(e)}")
+
+def inject_rnode(radio_params_json):
+    # This is called by Kotlin AFTER the Bluetooth bridge is ready
+    params = json.loads(radio_params_json)
+    try:
+        ictx = {
+            "name": "RNode BT Bridge",
+            "type": "RNodeInterface",
+            "enabled": True,
+            "port": "tcp://127.0.0.1:8001",
+            "frequency": params.get("freq", 915000000),
+            "bandwidth": params.get("bw", 125000),
+            "txpower": params.get("tx", 20),
+            "spreadingfactor": params.get("sf", 7),
+            "codingrate": params.get("cr", 5),
+            "flow_control": False
+        }
+        
+        # Manually create and register the interface
+        ifac = RNodeInterface(RNS.Transport, ictx)
+        RNS.Transport.interfaces.append(ifac)
+        return "Interface Injected"
+    except Exception as e:
+        return f"Injection Failed: {str(e)}"
 
 def on_lxmf(lxm, service_obj):
     try:
