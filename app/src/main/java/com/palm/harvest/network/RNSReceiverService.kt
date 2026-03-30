@@ -8,6 +8,7 @@ import android.content.Intent
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
@@ -17,6 +18,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.io.IOException
 import java.net.ServerSocket
+import java.net.Socket
 import java.util.*
 import androidx.room.Room
 import org.json.JSONObject
@@ -56,47 +58,61 @@ class RNSReceiverService : Service() {
     private fun connectToRNode(device: BluetoothDevice) {
         serviceScope.launch {
             try {
-                onStatusUpdate("Connecting to ${device.name}...")
                 btSocket = device.createRfcommSocketToServiceRecord(SPP_UUID)
                 btSocket?.connect()
-                onStatusUpdate("BT Connected. Starting Bridge...")
+                onStatusUpdate("BT Connected. Starting Mesh...")
                 startTcpBridge()
             } catch (e: IOException) {
-                onStatusUpdate("BT Connection Failed")
+                onStatusUpdate("BT Error")
             }
         }
     }
 
     private fun startTcpBridge() {
         serviceScope.launch(Dispatchers.IO) {
+            var serverSocket: ServerSocket? = null
             try {
-                val serverSocket = ServerSocket(8001)
+                serverSocket = ServerSocket(8001)
                 
-                // IMPORTANT: Tell Python to inject the interface NOW that the server is ready
+                // CRITICAL: Delay injection slightly so the server is 100% ready to accept()
+                delay(1000)
                 injectPythonInterface()
 
                 val client = serverSocket.accept()
+                client.tcpNoDelay = true 
+                
                 val btIn = btSocket!!.inputStream
                 val btOut = btSocket!!.outputStream
                 val tcpIn = client.inputStream
                 val tcpOut = client.outputStream
 
-                onStatusUpdate("Mesh Bridge Active")
+                onStatusUpdate("LoRa Link Active")
 
+                // BT -> TCP
                 launch {
                     val buffer = ByteArray(2048)
                     while (isActive) {
                         val len = btIn.read(buffer)
-                        if (len > 0) tcpOut.write(buffer, 0, len)
+                        if (len > 0) {
+                            tcpOut.write(buffer, 0, len)
+                            tcpOut.flush()
+                        }
                     }
                 }
+
+                // TCP -> BT
                 val buffer = ByteArray(2048)
                 while (isActive) {
                     val len = tcpIn.read(buffer)
-                    if (len > 0) btOut.write(buffer, 0, len)
+                    if (len > 0) {
+                        btOut.write(buffer, 0, len)
+                        btOut.flush()
+                    }
                 }
             } catch (e: Exception) {
-                onStatusUpdate("Bridge Error: ${e.message}")
+                onStatusUpdate("Bridge Lost")
+            } finally {
+                serverSocket?.close()
             }
         }
     }
@@ -111,9 +127,7 @@ class RNSReceiverService : Service() {
             json.put("tx", prefs.getInt("tx", 20))
             json.put("sf", prefs.getInt("sf", 7))
             json.put("cr", prefs.getInt("cr", 5))
-            
-            val result = py.getModule("rns_engine").callAttr("inject_rnode", json.toString())
-            onStatusUpdate(result.toString())
+            py.getModule("rns_engine").callAttr("inject_rnode", json.toString())
         }
     }
 
@@ -129,10 +143,7 @@ class RNSReceiverService : Service() {
     private fun startRnsEngine() {
         serviceScope.launch {
             val py = Python.getInstance()
-            val prefs = getSharedPreferences("radio_settings", Context.MODE_PRIVATE)
-            val json = JSONObject()
-            json.put("freq", prefs.getInt("freq", 915000000))
-            py.getModule("rns_engine").callAttr("start_engine", this@RNSReceiverService, filesDir.absolutePath, json.toString())
+            py.getModule("rns_engine").callAttr("start_engine", this@RNSReceiverService, filesDir.absolutePath)
         }
     }
 

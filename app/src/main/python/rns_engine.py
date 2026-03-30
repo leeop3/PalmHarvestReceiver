@@ -4,7 +4,7 @@ import importlib.util, importlib.machinery
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-# --- 1. THE HIJACKS ---
+# --- HIJACKS ---
 platform.system = lambda: "Linux"
 def mock_module(name):
     if name not in sys.modules:
@@ -42,17 +42,23 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
     kotlin_cb = service_obj
     rns_dir = os.path.join(storage_path, ".reticulum")
     if not os.path.exists(rns_dir): os.makedirs(rns_dir)
+    
+    # CRITICAL: WIPE old config to stop the "[Errno 2] TCP" error loop
     with open(os.path.join(rns_dir, "config"), "w") as f:
-        f.write("[reticulum]\nenable_transport = True\n\n[interfaces]")
+        f.write("[reticulum]\nenable_transport = True\n\n[interfaces]\n")
 
     try:
+        # Start RNS with Debug Logging for ADB
         RNS.Reticulum(configdir=rns_dir, loglevel=RNS.LOG_DEBUG)
-        id_path = os.path.join(rns_dir, "storage_identity")
+        
+        id_path = os.path.join(storage_path, "storage_identity")
         local_id = RNS.Identity.from_file(id_path) if os.path.exists(id_path) else RNS.Identity()
         if not os.path.exists(id_path): local_id.to_file(id_path)
+        
         router = LXMRouter(identity=local_id, storagepath=os.path.join(storage_path, ".lxmf"))
         local_destination = router.register_delivery_identity(local_id, display_name="PalmReceiver")
         router.register_delivery_callback(on_lxmf)
+        
         service_obj.onStatusUpdate(f"RNS Online: {RNS.hexrep(local_destination.hash, False)}")
     except Exception as e:
         service_obj.onStatusUpdate(f"Init Error: {str(e)}")
@@ -60,14 +66,13 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
 def inject_rnode(radio_params_json):
     try:
         params = json.loads(radio_params_json)
+        print("RNS-LOG: Attempting to inject RNode via TCP 127.0.0.1:8001")
         
-        # CRITICAL FIX: port must be None (not a string) to trigger TCP mode 
-        # in the standard RNodeInterface driver.
         ictx = {
             "name": "RNode-Bridge",
             "type": "RNodeInterface",
             "enabled": True,
-            "port": None,             # <--- THIS MUST BE NONE
+            "port": None,            # Trigger TCP mode in driver
             "tcp_host": "127.0.0.1",
             "tcp_port": 8001,
             "frequency": int(params.get("freq")),
@@ -78,14 +83,15 @@ def inject_rnode(radio_params_json):
             "flow_control": False
         }
         
+        # Instantiate and add to transport
         ifac = RNodeInterface(RNS.Transport, ictx)
         ifac.mode = Interface.MODE_FULL
         RNS.Transport.interfaces.append(ifac)
         
         if local_destination: local_destination.announce()
-        return f"TCP Bridge Est: {int(params.get('freq'))/1000000} MHz"
+        return "Hardware Handshake Sent"
     except Exception as e:
-        return f"TCP Link Error: {str(e)}"
+        return f"Injection Error: {str(e)}"
 
 def on_lxmf(lxm):
     try:
