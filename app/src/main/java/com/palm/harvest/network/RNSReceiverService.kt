@@ -33,6 +33,7 @@ class RNSReceiverService : Service() {
 
     companion object {
         val serviceStatus = MutableStateFlow("Stopped")
+        val localAddress = MutableStateFlow("")
         const val CHANNEL_ID = "RNS_SERVICE_CHANNEL"
         const val ACTION_CONNECT = "com.palm.harvest.CONNECT"
         const val EXTRA_DEVICE = "bt_device"
@@ -157,6 +158,10 @@ class RNSReceiverService : Service() {
             val py = Python.getInstance()
             py.getModule("rns_engine").callAttr("start_engine", this@RNSReceiverService, filesDir.absolutePath)
         }
+    }
+
+        fun updateLocalAddress(addr: String) {
+        localAddress.value = addr
     }
 
     fun onStatusUpdate(msg: String) {
