@@ -19,7 +19,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.ServerSocket
-import java.net.Socket
 import java.util.*
 import androidx.room.Room
 import org.json.JSONObject
@@ -63,7 +62,7 @@ class RNSReceiverService : Service() {
                 btSocket?.close()
                 tcpServer?.close()
                 
-                // 1. Setup Bluetooth Insecurely (Fastest)
+                // 1. Setup Bluetooth Insecurely
                 val m = device.javaClass.getMethod("createInsecureRfcommSocket", Int::class.javaPrimitiveType)
                 btSocket = m.invoke(device, 1) as BluetoothSocket
                 btSocket?.connect()
@@ -75,7 +74,7 @@ class RNSReceiverService : Service() {
                 
                 onStatusUpdate("Bridge 7633 Listening")
                 
-                // 3. Launch the Pipe Handlers in background so accept() doesn't block them
+                // 3. Launch the Pipe Handlers in background
                 launch { handleTcpClients() }
 
                 // 4. NOW tell Python to inject
@@ -105,20 +104,24 @@ class RNSReceiverService : Service() {
                     // BT -> TCP
                     launch {
                         val buf = ByteArray(2048)
-                        var r: Int
+                        var r = 0 // FIX: Explicitly initialized to 0
                         while (isActive && btIn.read(buf).also { r = it } != -1) {
-                            tcpOut.write(buf, 0, r)
-                            tcpOut.flush()
+                            if (r > 0) {
+                                tcpOut.write(buf, 0, r)
+                                tcpOut.flush()
+                            }
                         }
                     }
 
                     // TCP -> BT
                     launch {
                         val buf = ByteArray(2048)
-                        var r: Int
+                        var r = 0 // FIX: Explicitly initialized to 0
                         while (isActive && tcpIn.read(buf).also { r = it } != -1) {
-                            btOut.write(buf, 0, r)
-                            btOut.flush()
+                            if (r > 0) {
+                                btOut.write(buf, 0, r)
+                                btOut.flush()
+                            }
                         }
                     }
                 } catch (e: Exception) { break }
