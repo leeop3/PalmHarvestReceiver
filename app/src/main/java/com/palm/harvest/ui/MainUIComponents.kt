@@ -8,6 +8,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentActivity
@@ -16,7 +17,8 @@ import androidx.recyclerview.widget.*
 import androidx.room.Room
 import androidx.viewpager2.adapter.FragmentStateAdapter
 import com.google.zxing.BarcodeFormat
-import com.google.zxing.qrcode.QRCodeWriter
+import com.google.zxing.MultiFormatWriter
+import com.google.zxing.common.BitMatrix
 import com.palm.harvest.R
 import com.palm.harvest.data.*
 import com.palm.harvest.network.RNSReceiverService
@@ -25,7 +27,6 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
-// 1. THE VIEW PAGER ADAPTER
 class MainPagerAdapter(activity: FragmentActivity) : FragmentStateAdapter(activity) {
     override fun getItemCount(): Int = 3
     override fun createFragment(position: Int) = when(position) {
@@ -35,7 +36,6 @@ class MainPagerAdapter(activity: FragmentActivity) : FragmentStateAdapter(activi
     }
 }
 
-// 2. ADAPTER FOR INCOMING DATA
 class IncomingAdapter : ListAdapter<HarvestReport, IncomingAdapter.ViewHolder>(DiffCallback()) {
     class ViewHolder(v: View) : RecyclerView.ViewHolder(v) {
         val title: TextView = v.findViewById(R.id.txtHarvester)
@@ -44,8 +44,7 @@ class IncomingAdapter : ListAdapter<HarvestReport, IncomingAdapter.ViewHolder>(D
     }
     override fun onCreateViewHolder(p: ViewGroup, t: Int) = ViewHolder(LayoutInflater.from(p.context).inflate(R.layout.item_harvest, p, false))
     override fun onBindViewHolder(h: ViewHolder, p: Int) {
-        val i = getItem(p)
-        val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+        val i = getItem(p); val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
         h.title.text = "Harvester: ${i.harvesterId}"
         h.subtitle.text = "Block: ${i.blockId}"
         h.stats.text = "Total: ${i.ripeBunches + i.emptyBunches} | Time: ${sdf.format(Date(i.timestamp * 1000))}"
@@ -56,7 +55,6 @@ class IncomingAdapter : ListAdapter<HarvestReport, IncomingAdapter.ViewHolder>(D
     }
 }
 
-// 3. ADAPTER FOR BLOCK SUMMARY
 class SummaryAdapter : ListAdapter<BlockSummary, SummaryAdapter.ViewHolder>(SumDiffCallback()) {
     class ViewHolder(v: View) : RecyclerView.ViewHolder(v) {
         val title: TextView = v.findViewById(R.id.txtHarvester)
@@ -76,46 +74,43 @@ class SummaryAdapter : ListAdapter<BlockSummary, SummaryAdapter.ViewHolder>(SumD
     }
 }
 
-// 4. ADAPTER FOR DISCOVERED NODES (Includes Local Header)
-class NodeAdapter(private val onLocalClick: (String) -> Unit) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
-    private var localAddr: String = "Initializing..."
-    private var nodeList: List<DiscoveredNode> = emptyList()
+class NodeAdapter(private val onLocalClick: (String) -> Unit) : RecyclerView.Adapter<NodeAdapter.NodeViewHolder>() {
+    private var localAddr: String = ""
+    private var discoveredNodes: List<DiscoveredNode> = emptyList()
 
     fun setLocalAddress(addr: String) {
-        if (addr.isNotEmpty()) {
-            this.localAddr = addr
-            notifyItemChanged(0)
-        }
+        this.localAddr = addr
+        notifyItemChanged(0)
     }
 
-    fun submitList(list: List<DiscoveredNode>) {
-        this.nodeList = list
+    fun setDiscoveredNodes(nodes: List<DiscoveredNode>) {
+        this.discoveredNodes = nodes
         notifyDataSetChanged()
     }
 
-    override fun getItemViewType(p: Int) = if (p == 0) 0 else 1
-    override fun getItemCount() = nodeList.size + 1
+    override fun getItemViewType(position: Int): Int = if (position == 0) 0 else 1
 
-    override fun onCreateViewHolder(p: ViewGroup, t: Int): RecyclerView.ViewHolder {
-        val v = LayoutInflater.from(p.context).inflate(R.layout.item_harvest, p, false)
-        return NodeViewHolder(v)
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): NodeViewHolder {
+        val view = LayoutInflater.from(parent.context).inflate(R.layout.item_harvest, parent, false)
+        return NodeViewHolder(view)
     }
 
-    override fun onBindViewHolder(holder: RecyclerView.ViewHolder, p: Int) {
-        val h = holder as NodeViewHolder
-        if (p == 0) {
-            h.title.text = "THIS RECEIVER (Tap for QR)"
-            h.subtitle.text = "Address: $localAddr"
-            h.stats.text = "Harvesters must send reports to this hex"
-            h.itemView.setOnClickListener { if (localAddr != "Initializing...") onLocalClick(localAddr) }
+    override fun onBindViewHolder(holder: NodeViewHolder, position: Int) {
+        if (position == 0) {
+            holder.title.text = "THIS RECEIVER (Tap for QR)"
+            holder.subtitle.text = if (localAddr.isEmpty()) "Waiting for RNS..." else "Address: $localAddr"
+            holder.stats.text = "Point harvesters here"
+            holder.itemView.setOnClickListener { if (localAddr.isNotEmpty()) onLocalClick(localAddr) }
         } else {
-            val i = nodeList[p - 1]
-            h.title.text = "Harvester: ${i.nickname}"
-            h.subtitle.text = "Hash: ${i.hash}"
-            h.stats.text = "Last Heard: ${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(i.lastHeard))}"
-            h.itemView.setOnClickListener(null)
+            val node = discoveredNodes[position - 1]
+            holder.title.text = "Harvester: ${node.nickname}"
+            holder.subtitle.text = "Hash: ${node.hash}"
+            holder.stats.text = "Last seen: ${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(node.lastHeard))}"
+            holder.itemView.setOnClickListener(null)
         }
     }
+
+    override fun getItemCount(): Int = discoveredNodes.size + 1
 
     class NodeViewHolder(v: View) : RecyclerView.ViewHolder(v) {
         val title: TextView = v.findViewById(R.id.txtHarvester)
@@ -124,14 +119,12 @@ class NodeAdapter(private val onLocalClick: (String) -> Unit) : RecyclerView.Ada
     }
 }
 
-// 5. FRAGMENTS
 class IncomingFragment : Fragment(R.layout.fragment_incoming) {
     override fun onViewCreated(v: View, s: Bundle?) {
         val rv = v.findViewById<RecyclerView>(R.id.recyclerViewIncoming)
         val adapter = IncomingAdapter()
-        rv.layoutManager = LinearLayoutManager(context)
-        rv.adapter = adapter
-        val db = Room.databaseBuilder(requireContext(), AppDatabase::class.java, "harvest-db").fallbackToDestructiveMigration().build()
+        rv.layoutManager = LinearLayoutManager(context); rv.adapter = adapter
+        val db = Room.databaseBuilder(requireContext().applicationContext, AppDatabase::class.java, "harvest-db").fallbackToDestructiveMigration().build()
         viewLifecycleOwner.lifecycleScope.launch { db.harvestDao().getAllReports().collectLatest { adapter.submitList(it) } }
     }
 }
@@ -140,9 +133,8 @@ class SummaryFragment : Fragment(R.layout.fragment_summary) {
     override fun onViewCreated(v: View, s: Bundle?) {
         val rv = v.findViewById<RecyclerView>(R.id.recyclerViewSummary)
         val adapter = SummaryAdapter()
-        rv.layoutManager = LinearLayoutManager(context)
-        rv.adapter = adapter
-        val db = Room.databaseBuilder(requireContext(), AppDatabase::class.java, "harvest-db").fallbackToDestructiveMigration().build()
+        rv.layoutManager = LinearLayoutManager(context); rv.adapter = adapter
+        val db = Room.databaseBuilder(requireContext().applicationContext, AppDatabase::class.java, "harvest-db").fallbackToDestructiveMigration().build()
         viewLifecycleOwner.lifecycleScope.launch { db.harvestDao().getBlockSummaries().collectLatest { adapter.submitList(it) } }
     }
 }
@@ -151,44 +143,47 @@ class NodesFragment : Fragment(R.layout.fragment_nodes) {
     override fun onViewCreated(v: View, s: Bundle?) {
         val rv = v.findViewById<RecyclerView>(R.id.recyclerViewNodes)
         val adapter = NodeAdapter { addr -> showQrDialog(addr) }
-        rv.layoutManager = LinearLayoutManager(context)
-        rv.adapter = adapter
+        rv.layoutManager = LinearLayoutManager(context); rv.adapter = adapter
         
-        viewLifecycleOwner.lifecycleScope.launch { 
-            RNSReceiverService.localAddress.collectLatest { adapter.setLocalAddress(it) } 
+        // Use viewLifecycleOwner to avoid crashes during fragment transition
+        viewLifecycleOwner.lifecycleScope.launch {
+            RNSReceiverService.localAddress.collectLatest { adapter.setLocalAddress(it) }
         }
-        
-        val db = Room.databaseBuilder(requireContext(), AppDatabase::class.java, "harvest-db").fallbackToDestructiveMigration().build()
-        viewLifecycleOwner.lifecycleScope.launch { 
-            db.harvestDao().getAllNodes().collectLatest { adapter.submitList(it) } 
+
+        val db = Room.databaseBuilder(requireContext().applicationContext, AppDatabase::class.java, "harvest-db").fallbackToDestructiveMigration().build()
+        viewLifecycleOwner.lifecycleScope.launch {
+            db.harvestDao().getAllNodes().collectLatest { adapter.setDiscoveredNodes(it) }
         }
     }
 
     private fun showQrDialog(addr: String) {
-        try {
-            val iv = ImageView(context).apply { 
-                setPadding(60, 60, 60, 60)
-                setImageBitmap(generateQr(addr))
+        val qrBitmap = generateQr(addr)
+        if (qrBitmap != null) {
+            val iv = ImageView(context).apply {
+                setPadding(40, 40, 40, 40)
+                setImageBitmap(qrBitmap)
             }
             AlertDialog.Builder(requireContext())
-                .setTitle("Receiver QR Code")
-                .setMessage(" harvester node can scan this to add destination")
+                .setTitle("Receiver QR")
+                .setMessage("Scan this to add destination")
                 .setView(iv)
                 .setPositiveButton("Close", null)
                 .show()
-        } catch (e: Exception) {
-            android.widget.Toast.makeText(context, "Error generating QR", android.widget.Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, "Could not generate QR", Toast.LENGTH_SHORT).show()
         }
     }
 
-    private fun generateQr(text: String): Bitmap {
-        val w = QRCodeWriter().encode(text, BarcodeFormat.QR_CODE, 512, 512)
-        val b = Bitmap.createBitmap(512, 512, Bitmap.Config.RGB_565)
-        for (x in 0 until 512) {
-            for (y in 0 until 512) {
-                b.setPixel(x, y, if (w[x, y]) Color.BLACK else Color.WHITE)
+    private fun generateQr(text: String): Bitmap? {
+        return try {
+            val bitMatrix: BitMatrix = MultiFormatWriter().encode(text, BarcodeFormat.QR_CODE, 512, 512)
+            val bitmap = Bitmap.createBitmap(512, 512, Bitmap.Config.RGB_565)
+            for (x in 0 until 512) {
+                for (y in 0 until 512) {
+                    bitmap.setPixel(x, y, if (bitMatrix.get(x, y)) Color.BLACK else Color.WHITE)
+                }
             }
-        }
-        return b
+            bitmap
+        } catch (e: Exception) { null }
     }
 }
