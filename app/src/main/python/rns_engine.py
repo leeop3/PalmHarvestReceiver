@@ -2,29 +2,35 @@ import sys, os, csv, io, json, signal, time
 from types import ModuleType
 import importlib.util, importlib.machinery
 
-# --- THE DEEP ANDROID MOCK FIX ---
+# --- THE ULTIMATE MOCK 4.0 (Fixes usb4a error) ---
+class Dummy:
+    def __getattr__(self, name): return Dummy()
+    def __call__(self, *args, **kwargs): return Dummy()
+
 def mock_module(name):
     mock = ModuleType(name)
     mock.__spec__ = importlib.machinery.ModuleSpec(name, None)
     sys.modules[name] = mock
     return mock
 
-# 1. Mock usbserial4a and its sub-attr
+# Mock usbserial4a
 usbserial_mock = mock_module("usbserial4a")
-usbserial_mock.serial4a = ModuleType("serial4a")
+usbserial_mock.serial4a = Dummy()
 usbserial_mock.get_ports_list = lambda: []
 
-# 2. Mock usb4a and the specific 'usb' name Reticulum wants to import
-usb4a_mock = mock_module("usb4a")
-usb4a_mock.usb = ModuleType("usb") # This fixes the "cannot import name 'usb'" error
-sys.modules["usb4a.usb"] = usb4a_mock.usb 
-
-# 3. Mock jnius
+# Mock jnius
 jnius_mock = mock_module("jnius")
-jnius_mock.autoclass = lambda x: ModuleType("DummyClass")
-jnius_mock.cast = lambda x, y: x
+jnius_mock.autoclass = lambda x: Dummy()
+jnius_mock.cast = lambda x, y: Dummy()
 
-# 4. Overload find_spec
+# Mock usb4a and its sub-object 'usb'
+usb4a_mock = mock_module("usb4a")
+usb4a_inner = ModuleType("usb")
+usb4a_inner.get_usb_device_list = lambda: []
+usb4a_mock.usb = usb4a_inner
+sys.modules["usb4a.usb"] = usb4a_inner
+
+# Patch find_spec for all mocks
 _orig_find_spec = importlib.util.find_spec
 def _mock_find_spec(name, package=None):
     if name in ["usbserial4a", "jnius", "usb4a", "usb4a.usb"]:
@@ -33,7 +39,6 @@ def _mock_find_spec(name, package=None):
 importlib.util.find_spec = _mock_find_spec
 
 # --- RNS ENGINE ---
-signal.signal = lambda sig, handler: None
 import RNS, LXMF
 from LXMF import LXMRouter
 
@@ -69,7 +74,6 @@ share_instance = Yes
         f_out.write(config)
 
     try:
-        # Now that mocks are perfect, Reticulum will initialize the interface
         RNS.Reticulum(configdir=rns_dir)
         
         id_path = os.path.join(storage_path, "storage_identity")
@@ -77,14 +81,14 @@ share_instance = Yes
         if not os.path.exists(id_path): local_id.to_file(id_path)
                 
         router = LXMRouter(identity=local_id, storagepath=storage_path)
-        router.register_delivery_callback(lambda lxm: on_lxm(lxm, service_obj))
+        router.register_delivery_callback(lambda lxm: on_lxmf(lxm, service_obj))
         
         addr = RNS.hexrep(local_id.hash, False)
         service_obj.onStatusUpdate(f"RNS Online: {addr}")
     except Exception as e:
         service_obj.onStatusUpdate(f"RNS Error: {str(e)}")
 
-def on_lxm(lxm, service_obj):
+def on_lxmf(lxm, service_obj):
     try:
         content = lxm.content.decode("utf-8")
         if "harvester_id" in content:
