@@ -1,24 +1,39 @@
-import sys, os, csv, io, json, signal
+import sys, os, csv, io, json, signal, time
 from types import ModuleType
+import importlib.util, importlib.machinery
 
-# --- ANDROID MOCKS ---
-mock_usb = ModuleType("usbserial4a")
-mock_usb.serial4a = ModuleType("serial4a")
-mock_usb.get_ports_list = lambda: []
-sys.modules["usbserial4a"] = mock_usb
-mock_jnius = ModuleType("jnius")
-mock_jnius.autoclass = lambda x: None
-sys.modules["jnius"] = mock_jnius
+# --- ROBUST ANDROID MOCK FIX ---
+# We create fake specs to satisfy Reticulum's internal importlib.util.find_spec calls
+def mock_module(name):
+    mock = ModuleType(name)
+    mock.__spec__ = importlib.machinery.ModuleSpec(name, None)
+    sys.modules[name] = mock
+    return mock
 
+# Create the mocks
+usb_mock = mock_module("usbserial4a")
+usb_mock.serial4a = ModuleType("serial4a")
+usb_mock.get_ports_list = lambda: []
+
+jnius_mock = mock_module("jnius")
+jnius_mock.autoclass = lambda x: ModuleType("DummyClass")
+jnius_mock.cast = lambda x, y: x
+
+# Overload find_spec to return our mock specs
+_orig_find_spec = importlib.util.find_spec
+def _mock_find_spec(name, package=None):
+    if name in ["usbserial4a", "jnius"]:
+        return sys.modules[name].__spec__
+    return _orig_find_spec(name, package)
+importlib.util.find_spec = _mock_find_spec
+
+# --- RNS ENGINE ---
 signal.signal = lambda sig, handler: None
 import RNS, LXMF
 from LXMF import LXMRouter
 
 def start_engine(service_obj, storage_path, radio_params_json):
-    # 1. Parse the JSON string into a native Python Dictionary
-    # This completely eliminates the "LinkedHashMap not iterable" error.
     params = json.loads(radio_params_json)
-    
     rns_dir = os.path.join(storage_path, ".reticulum")
     if not os.path.exists(rns_dir): os.makedirs(rns_dir)
     
@@ -37,6 +52,7 @@ share_instance = Yes
   [[RNode Interface]]
     type = RNodeInterface
     enabled = True
+    # Connectivity via the Kotlin TCP Bridge
     port = tcp://127.0.0.1:8001
     frequency = {f}
     bandwidth = {bw}
