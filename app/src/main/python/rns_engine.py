@@ -1,106 +1,76 @@
-import os, sys, time, base64, platform, json, csv, io, signal, warnings
+import os, sys, time, platform, json, csv, io, signal, warnings
 from types import ModuleType
 import importlib.util, importlib.machinery
 
-# --- 1. THE ULTIMATE MOCKS ---
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-class Dummy:
-    def __getattr__(self, name): return Dummy()
-    def __call__(self, *args, **kwargs): return Dummy()
-    def __len__(self): return 0
-
+# --- THE HIJACKS ---
+platform.system = lambda: "Linux"
 def mock_module(name):
-    mock = ModuleType(name)
-    mock.__spec__ = importlib.machinery.ModuleSpec(name, None)
-    if name == "usbserial4a": 
-        mock.serial4a = Dummy()
-        mock.get_ports_list = lambda: []
-    if name == "usb4a":
-        mock.usb = Dummy()
-    if name == "jnius":
-        mock.autoclass = lambda x: Dummy()
-        mock.cast = lambda x, y: Dummy()
-    sys.modules[name] = mock
-    return mock
-
+    if name not in sys.modules:
+        mock = ModuleType(name)
+        mock.__spec__ = importlib.machinery.ModuleSpec(name, None)
+        if name == "usbserial4a": mock.get_ports_list = lambda: []
+        if name == "jnius":
+            class Dummy:
+                def autoclass(self, n): return self
+                def cast(self, x, y): return x
+            mock.autoclass = lambda x: Dummy()
+        if name == "usb4a":
+            mock.usb = ModuleType("usb"); mock.usb.get_usb_device_list = lambda: []
+        sys.modules[name] = mock
 mock_module("usbserial4a"); mock_module("usb4a"); mock_module("jnius")
 sys.modules["usb4a.usb"] = sys.modules["usb4a"].usb
 
-_orig_find_spec = importlib.util.find_spec
-def _mock_find_spec(name, package=None):
-    if name in ["usbserial4a", "jnius", "usb4a", "usb4a.usb"]: return sys.modules[name].__spec__
-    return _orig_find_spec(name, package)
-importlib.util.find_spec = _mock_find_spec
-
-# --- 2. THE GLOBAL PLATFORM HIJACK ---
-# We force the system to report as Linux to bypass Android-only hardware checks
-platform.system = lambda: "Linux"
-
 import RNS
-
-# CRITICAL FIX: Manually override the Reticulum internal platform utility
-# This stops the "The android specific rnode interface must be used on android" error
 try:
     import RNS.vendor.platformutils as pu
     pu.is_android = lambda: False
-    print("RNS-LOG: Android Platform Check Hijacked Successfully")
-except:
-    pass
+except: pass
 
-import LXMF
 from LXMF import LXMRouter
+from RNS.Interfaces.RNodeInterface import RNodeInterface
 from RNS.Interfaces.Interface import Interface
 
-# Disable signals for Android
 signal.signal = lambda sig, handler: None
 
-# --- 3. PALM HARVEST ENGINE LOGIC ---
 kotlin_cb = None
-router = None
 local_destination = None
 
 def start_engine(service_obj, storage_path, radio_params_json=None):
-    global kotlin_cb, router, local_destination
+    global kotlin_cb, local_destination
     kotlin_cb = service_obj
-    
     rns_dir = os.path.join(storage_path, ".reticulum")
     if not os.path.exists(rns_dir): os.makedirs(rns_dir)
-    
-    # Start with empty interfaces
     with open(os.path.join(rns_dir, "config"), "w") as f:
-        f.write("[reticulum]\nenable_transport = True\nshare_instance = Yes\n\n[interfaces]")
+        f.write("[reticulum]\nenable_transport = True\n\n[interfaces]")
 
     try:
-        RNS.Reticulum(configdir=rns_dir)
-        
-        id_path = os.path.join(rns_dir, "storage_identity")
+        RNS.Reticulum(configdir=rns_dir, loglevel=RNS.LOG_DEBUG)
+        id_path = os.path.join(storage_path, "storage_identity")
         local_id = RNS.Identity.from_file(id_path) if os.path.exists(id_path) else RNS.Identity()
         if not os.path.exists(id_path): local_id.to_file(id_path)
-
         router = LXMRouter(identity=local_id, storagepath=os.path.join(storage_path, ".lxmf"))
         local_destination = router.register_delivery_identity(local_id, display_name="PalmReceiver")
         router.register_delivery_callback(on_lxmf)
-        
-        addr = RNS.hexrep(local_destination.hash, False)
-        kotlin_cb.onStatusUpdate(f"RNS Online: {addr}")
+        service_obj.onStatusUpdate(f"RNS Online: {RNS.hexrep(local_destination.hash, False)}")
     except Exception as e:
-        if kotlin_cb: kotlin_cb.onStatusUpdate(f"Init Error: {str(e)}")
+        service_obj.onStatusUpdate(f"Init Error: {str(e)}")
 
 def inject_rnode(radio_params_json):
     try:
         params = json.loads(radio_params_json)
+        # Give the bridge a moment to stabilize
+        time.sleep(1) 
         
-        # We import the Universal RNodeInterface, NOT the Android one
-        from RNS.Interfaces.RNodeInterface import RNodeInterface
-        
+        # FIX: We use tcp_host and tcp_port instead of "port": "socket://..."
+        # This forces Reticulum to use its internal TCP logic instead of pyserial's file opener.
         ictx = {
             "name": "RNode-Bridge",
             "type": "RNodeInterface",
-            "interface_enabled": True,
-            "outgoing": True,
-            # We use 'socket' protocol to force pyserial to treat the bridge as raw serial
-            "port": "socket://127.0.0.1:8001",
+            "enabled": True,
+            "tcp_host": "127.0.0.1",
+            "tcp_port": 8001,
             "frequency": int(params.get("freq")),
             "bandwidth": int(params.get("bw")),
             "txpower": int(params.get("tx")),
@@ -109,17 +79,14 @@ def inject_rnode(radio_params_json):
             "flow_control": False
         }
         
-        # Instantiate the Universal interface. Since is_android is False, this works!
-        new_ifac = RNodeInterface(RNS.Transport, ictx)
-        new_ifac.mode = Interface.MODE_FULL
-        RNS.Transport.interfaces.append(new_ifac)
+        ifac = RNodeInterface(RNS.Transport, ictx)
+        ifac.mode = Interface.MODE_FULL
+        RNS.Transport.interfaces.append(ifac)
         
-        time.sleep(1)
         if local_destination: local_destination.announce()
-        
-        return f"Link Successful: {int(params.get('freq'))/1000000} MHz"
+        return f"TCP Link Est: {int(params.get('freq'))/1000000} MHz"
     except Exception as e:
-        return f"Link Failed: {str(e)}"
+        return f"TCP Link Error: {str(e)}"
 
 def on_lxmf(lxm):
     try:
