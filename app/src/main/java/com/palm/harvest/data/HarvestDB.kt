@@ -21,8 +21,17 @@ data class HarvestReport(
 data class DiscoveredNode(
     @PrimaryKey val hash: String,
     val nickname: String,
-    val lastHeard: Long
-)
+    val firstSeen: Long,
+    val lastSeen: Long,
+    val announceCount: Int
+) {
+    val label: String
+        get() = nickname.takeIf { it.isNotBlank() && it != "Unknown Harvester" }
+            ?: "Node ${hash.take(8)}…"
+
+    val shortAddress: String
+        get() = hash.takeLast(8).chunked(2).joinToString(":")
+}
 
 data class BlockSummary(
     val blockId: String,
@@ -36,7 +45,6 @@ interface HarvestDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertReport(report: HarvestReport)
 
-    // CHANGED TO LiveData to prevent Fragment crashes
     @Query("SELECT * FROM harvest_reports ORDER BY timestamp DESC")
     fun getAllReports(): LiveData<List<HarvestReport>>
 
@@ -51,38 +59,37 @@ interface HarvestDao {
     """)
     fun getBlockSummaries(): LiveData<List<BlockSummary>>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertNode(node: DiscoveredNode)
+    // THE UPSERT: If node exists, increment count and update time. If new, insert it.
+    @Query("""
+        INSERT INTO discovered_nodes (hash, nickname, firstSeen, lastSeen, announceCount)
+        VALUES (:hash, :nickname, :time, :time, 1)
+        ON CONFLICT(hash) DO UPDATE SET 
+            nickname = excluded.nickname, 
+            lastSeen = excluded.lastSeen, 
+            announceCount = announceCount + 1
+    """)
+    suspend fun upsertNode(hash: String, nickname: String, time: Long)
 
-    @Query("SELECT * FROM discovered_nodes ORDER BY lastHeard DESC")
+    @Query("SELECT * FROM discovered_nodes ORDER BY lastSeen DESC")
     fun getAllNodes(): LiveData<List<DiscoveredNode>>
 }
 
-@Database(entities = [HarvestReport::class, DiscoveredNode::class], version = 5, exportSchema = false)
+@Database(entities = [HarvestReport::class, DiscoveredNode::class], version = 6, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun harvestDao(): HarvestDao
 
-    // USING THE EXACT SYNCHRONIZED SINGLETON FROM YOUR OTHER APP
     companion object {
         private const val DATABASE_NAME = "harvest_receiver.db"
-
-        @Volatile
-        private var INSTANCE: AppDatabase? = null
+        @Volatile private var INSTANCE: AppDatabase? = null
 
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 INSTANCE ?: buildDatabase(context).also { INSTANCE = it }
             }
         }
-
         private fun buildDatabase(context: Context): AppDatabase {
-            return Room.databaseBuilder(
-                context.applicationContext,
-                AppDatabase::class.java,
-                DATABASE_NAME
-            )
-            .fallbackToDestructiveMigration()
-            .build()
+            return Room.databaseBuilder(context.applicationContext, AppDatabase::class.java, DATABASE_NAME)
+            .fallbackToDestructiveMigration().build()
         }
     }
 }

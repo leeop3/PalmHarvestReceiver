@@ -87,9 +87,10 @@ class NodeAdapter(private val onLocalClick: (String) -> Unit) : RecyclerView.Ada
             h.itemView.setOnClickListener { if (!localAddr.contains("Waiting")) onLocalClick(localAddr) }
         } else {
             val i = nodes[p - 1]; val df = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-            h.t.text = "Harvester: ${i.nickname}"
-            h.b.text = "Hash: ${i.hash}"
-            h.s.text = "Last Heard: ${df.format(Date(i.lastHeard))}"
+            // Use the rich data model logic from rnshello
+            h.t.text = i.label
+            h.b.text = "Address: ${i.shortAddress} | Anns: ${i.announceCount}"
+            h.s.text = "Last Heard: ${df.format(Date(i.lastSeen))}"
             h.itemView.setOnClickListener(null)
         }
     }
