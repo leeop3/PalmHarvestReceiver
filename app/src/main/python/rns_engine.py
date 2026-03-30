@@ -61,13 +61,13 @@ def inject_rnode(radio_params_json):
     try:
         params = json.loads(radio_params_json)
         
-        # We MUST provide "port" as a key to satisfy the RNodeInterface validator.
-        # But we provide tcp_host/tcp_port to actually establish the connection.
+        # CRITICAL FIX: port must be None (not a string) to trigger TCP mode 
+        # in the standard RNodeInterface driver.
         ictx = {
             "name": "RNode-Bridge",
             "type": "RNodeInterface",
             "enabled": True,
-            "port": "TCP", # <--- DUMMY VALUE TO FIX "NO PORT SPECIFIED"
+            "port": None,             # <--- THIS MUST BE NONE
             "tcp_host": "127.0.0.1",
             "tcp_port": 8001,
             "frequency": int(params.get("freq")),
@@ -78,7 +78,6 @@ def inject_rnode(radio_params_json):
             "flow_control": False
         }
         
-        # Instantiate and manually register
         ifac = RNodeInterface(RNS.Transport, ictx)
         ifac.mode = Interface.MODE_FULL
         RNS.Transport.interfaces.append(ifac)
