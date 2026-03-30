@@ -1,10 +1,12 @@
-import os, sys, time, json, csv, io, signal, warnings, shutil
+import sys, os, csv, io, json, signal, warnings, shutil, platform
 from types import ModuleType
 import importlib.util, importlib.machinery
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-# --- MOCKS ---
+# --- 1. THE HIJACKS & MOCKS ---
+platform.system = lambda: "Linux"
+
 class Dummy:
     def __init__(self, name="Dummy"):
         self.__name__ = name
@@ -30,8 +32,7 @@ def _mock_find_spec(name, package=None):
     return _orig_find_spec(name, package)
 importlib.util.find_spec = _mock_find_spec
 
-# --- IMPORT RNS ---
-platform.system = lambda: "Linux"
+# --- 2. IMPORT RNS ---
 import RNS
 try:
     import RNS.vendor.platformutils as pu
@@ -47,20 +48,20 @@ signal.signal = lambda sig, handler: None
 kotlin_cb = None
 local_destination = None
 
-# --- IMPROVED DISCOVERY HANDLER ---
+# --- 3. DISCOVERY HANDLER ---
 class DiscoveryHandler:
     def __init__(self):
-        self.aspect_filter = None # Listen to all aspects
+        self.aspect_filter = None 
 
     def received_announce(self, destination_hash, announced_identity, app_data):
         try:
             h = RNS.hexrep(destination_hash, False)
-            # Harvester apps usually send nickname in app_data
+            # Nicknames are usually sent in app_data by harvester apps
             n = app_data.decode("utf-8") if app_data else "Unknown Harvester"
             if kotlin_cb:
                 kotlin_cb.onNodeDiscovered(h, n)
         except Exception as e:
-            print(f"Discovery error: {e}")
+            pass
 
 def start_engine(service_obj, storage_path, radio_params_json=None):
     global kotlin_cb, local_destination
@@ -79,14 +80,14 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
         
         router = LXMRouter(identity=local_id, storagepath=os.path.join(storage_path, ".lxmf"))
         local_destination = router.register_delivery_identity(local_id, display_name="PalmReceiver")
-        router.register_delivery_callback(on_lxmf)
+        router.register_delivery_callback(lambda lxm: on_lxmf(lxm, service_obj))
         
         # Register the fixed Discovery Handler
         RNS.Transport.register_announce_handler(DiscoveryHandler())
         
         addr = RNS.hexrep(local_destination.hash, False)
         service_obj.onStatusUpdate(f"RNS Online: {addr}")
-        # Send own address to Kotlin for QR feature
+        # Send local address to Kotlin for QR generation
         service_obj.updateLocalAddress(addr)
     except Exception as e:
         service_obj.onStatusUpdate(f"Init Error: {str(e)}")
@@ -115,22 +116,22 @@ def inject_rnode(radio_params_json):
         RNS.Transport.interfaces.append(ifac)
         time.sleep(1)
         if local_destination: local_destination.announce()
-        return "RNode Link Established"
+        return "RNode Active"
     except Exception as e:
         return f"Link Failed: {str(e)}"
 
-def on_lxmf(lxm):
+def on_lxmf(lxm, service_obj):
     try:
         content = lxm.content.decode("utf-8")
         if "harvester_id" in content:
             f_io = io.StringIO(content)
             reader = csv.DictReader(f_io)
             for row in reader:
-                kotlin_cb.onHarvestReceived(
+                service_obj.onHarvestReceived(
                     row['id'], row['harvester_id'], row['block_id'],
                     int(row['ripe_bunches']), int(row['empty_bunches']),
                     float(row['latitude']), float(row['longitude']),
                     int(row['timestamp']), row.get('photo_file', "")
                 )
     except Exception as e:
-        if kotlin_cb: kotlin_cb.onStatusUpdate(f"Data Error: {str(e)}")
+        if service_obj: service_obj.onStatusUpdate(f"Data Error: {str(e)}")

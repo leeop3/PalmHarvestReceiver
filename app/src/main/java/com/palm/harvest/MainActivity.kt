@@ -64,7 +64,7 @@ class MainActivity : AppCompatActivity() {
                 true
             }
             2 -> {
-                RadioSettingsDialog().show(supportFragmentManager, "radio_settings")
+                com.palm.harvest.ui.RadioSettingsDialog().show(supportFragmentManager, "radio_settings")
                 true
             }
             else -> super.onOptionsItemSelected(item)
