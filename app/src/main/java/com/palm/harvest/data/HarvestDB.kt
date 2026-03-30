@@ -15,34 +15,47 @@ data class HarvestReport(
     val photoFile: String
 )
 
-data class HarvesterSummary(
-    val harvesterId: String,
+@Entity(tableName = "discovered_nodes")
+data class DiscoveredNode(
+    @PrimaryKey val hash: String,
+    val nickname: String,
+    val lastHeard: Long
+)
+
+data class BlockSummary(
+    val blockId: String,
     val totalRipe: Int,
     val totalEmpty: Int,
-    val reportCount: Int
+    val totalBunches: Int
 )
 
 @Dao
 interface HarvestDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
-    suspend fun insert(report: HarvestReport)
+    suspend fun insertReport(report: HarvestReport)
 
     @Query("SELECT * FROM harvest_reports ORDER BY timestamp DESC")
     fun getAllReports(): Flow<List<HarvestReport>>
 
     @Query("""
-        SELECT harvesterId, 
+        SELECT blockId, 
                SUM(ripeBunches) as totalRipe, 
                SUM(emptyBunches) as totalEmpty, 
-               COUNT(id) as reportCount 
+               SUM(ripeBunches + emptyBunches) as totalBunches 
         FROM harvest_reports 
-        GROUP BY harvesterId
+        GROUP BY blockId 
+        ORDER BY blockId ASC
     """)
-    fun getSummaries(): Flow<List<HarvesterSummary>>
+    fun getBlockSummaries(): Flow<List<BlockSummary>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertNode(node: DiscoveredNode)
+
+    @Query("SELECT * FROM discovered_nodes ORDER BY lastHeard DESC")
+    fun getAllNodes(): Flow<List<DiscoveredNode>>
 }
 
-// FIX: Set exportSchema = false to remove the Kapt warning
-@Database(entities = [HarvestReport::class], version = 1, exportSchema = false)
+@Database(entities = [HarvestReport::class, DiscoveredNode::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun harvestDao(): HarvestDao
 }

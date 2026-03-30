@@ -147,7 +147,7 @@ class RNSReceiverService : Service() {
         super.onCreate()
         createNotificationChannel()
         startForeground(1, createNotification("Starting RNS..."))
-        db = Room.databaseBuilder(applicationContext, AppDatabase::class.java, "harvest-db").build()
+        db = Room.databaseBuilder(applicationContext, AppDatabase::class.java, "harvest-db").fallbackToDestructiveMigration().build()
         if (!Python.isStarted()) Python.start(AndroidPlatform(this))
         startRnsEngine()
     }
@@ -162,6 +162,20 @@ class RNSReceiverService : Service() {
     fun onStatusUpdate(msg: String) {
         serviceStatus.value = msg
         updateNotification(msg)
+    }
+
+        fun onNodeDiscovered(hash: String, nickname: String) {
+        serviceScope.launch {
+            val node = com.palm.harvest.data.DiscoveredNode(hash, nickname, System.currentTimeMillis())
+            db.harvestDao().insertNode(node)
+        }
+    }
+
+        fun onNodeDiscovered(hash: String, nickname: String) {
+        serviceScope.launch {
+            val node = com.palm.harvest.data.DiscoveredNode(hash, nickname, System.currentTimeMillis())
+            db.harvestDao().insertNode(node)
+        }
     }
 
     fun onHarvestReceived(id: String, hId: String, bId: String, ripe: Int, empty: Int, lat: Double, lon: Double, ts: Long, photo: String) {

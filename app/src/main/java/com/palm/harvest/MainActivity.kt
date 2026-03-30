@@ -44,7 +44,7 @@ class MainActivity : AppCompatActivity() {
         // Setup ViewPager and Tabs
         binding.viewPager.adapter = MainPagerAdapter(this)
         TabLayoutMediator(binding.tabLayout, binding.viewPager) { tab, pos ->
-            tab.text = if (pos == 0) "📡 Incoming" else "📊 Summary"
+            tab.text = when(pos) { 0 -> "📡 Incoming"; 1 -> "📊 Summary"; else -> "🔍 Nodes" }
         }.attach()
 
         startAndBindService()

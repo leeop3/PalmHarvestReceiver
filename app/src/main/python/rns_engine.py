@@ -4,8 +4,7 @@ import importlib.util, importlib.machinery
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-# --- 1. THE ULTIMATE ANDROID MOCKS ---
-# These satisfy all USB hardware checks so the driver can reach the TCP logic
+# --- 1. MOCKS ---
 class Dummy:
     def __init__(self, name="Dummy"):
         self.__name__ = name
@@ -20,29 +19,20 @@ def mock_module(name):
     sys.modules[name] = mock
     return mock
 
-usbserial_mock = mock_module("usbserial4a")
-usbserial_mock.serial4a = Dummy("serial4a")
-
-jnius_mock = mock_module("jnius")
-jnius_mock.autoclass = lambda x: Dummy("DummyClass")
-jnius_mock.cast = lambda x, y: x
-
-usb4a_mock = mock_module("usb4a")
-usb4a_inner = Dummy("usb4a.usb") 
-usb4a_mock.usb = usb4a_inner
-sys.modules["usb4a.usb"] = usb4a_inner
+mock_module("usbserial4a").serial4a = Dummy("serial4a")
+mock_module("jnius").autoclass = lambda x: Dummy("DummyClass")
+mock_module("usb4a").usb = Dummy("usb4a.usb")
+sys.modules["usb4a.usb"] = sys.modules["usb4a"].usb
 
 _orig_find_spec = importlib.util.find_spec
 def _mock_find_spec(name, package=None):
-    if name in["usbserial4a", "jnius", "usb4a", "usb4a.usb"]:
-        return sys.modules[name].__spec__
+    if name in["usbserial4a", "jnius", "usb4a", "usb4a.usb"]: return sys.modules[name].__spec__
     return _orig_find_spec(name, package)
 importlib.util.find_spec = _mock_find_spec
 
 # --- 2. IMPORT RNS ---
 import RNS
 from LXMF import LXMRouter
-# CRITICAL: Import the Android driver exactly like rnshello does
 from RNS.Interfaces.Android.RNodeInterface import RNodeInterface
 from RNS.Interfaces.Interface import Interface
 
@@ -51,13 +41,26 @@ signal.signal = lambda sig, handler: None
 kotlin_cb = None
 local_destination = None
 
+# --- 3. DISCOVERY HANDLER ---
+class DiscoveryHandler:
+    def __init__(self, callback_obj):
+        self.cb = callback_obj
+        self.aspect_filter = None
+
+    def received_announce(self, destination_hash, announced_identity, app_data):
+        try:
+            h = RNS.hexrep(destination_hash, False)
+            n = app_data.decode("utf-8") if app_data else "Unknown"
+            if self.cb: self.cb.onNodeDiscovered(h, n)
+        except Exception as e:
+            pass
+
 def start_engine(service_obj, storage_path, radio_params_json=None):
     global kotlin_cb, local_destination
     kotlin_cb = service_obj
     rns_dir = os.path.join(storage_path, ".reticulum")
     if not os.path.exists(rns_dir): os.makedirs(rns_dir)
     
-    # Empty config - we inject manually
     with open(os.path.join(rns_dir, "config"), "w") as f:
         f.write("[reticulum]\nenable_transport = True\nshare_instance = Yes\n\n[interfaces]\n")
 
@@ -71,6 +74,9 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
         local_destination = router.register_delivery_identity(local_id, display_name="PalmReceiver")
         router.register_delivery_callback(lambda lxm: on_lxmf(lxm, service_obj))
         
+        # Register Announce Handler to discover harvester nodes
+        RNS.Transport.register_announce_handler(DiscoveryHandler(service_obj))
+        
         service_obj.onStatusUpdate(f"RNS Online: {RNS.hexrep(local_destination.hash, False)}")
     except Exception as e:
         service_obj.onStatusUpdate(f"Init Error: {str(e)}")
@@ -78,9 +84,6 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
 def inject_rnode(radio_params_json):
     try:
         params = json.loads(radio_params_json)
-        
-        # EXACT DICTIONARY FROM RNSHELLO
-        # Android driver uses "interface_enabled", "tcp_host", and "tcp_port"
         ictx = {
             "name": "Android RNode Bridge",
             "type": "RNodeInterface",
@@ -95,13 +98,10 @@ def inject_rnode(radio_params_json):
             "codingrate": int(params.get("cr")),
             "flow_control": False
         }
-        
-        print("RNS-LOG: Creating Android RNodeInterface...")
         ifac = RNodeInterface(RNS.Transport, ictx)
         ifac.mode = Interface.MODE_FULL
         ifac.IN = True
         ifac.OUT = True
-        
         RNS.Transport.interfaces.append(ifac)
         
         time.sleep(1)
