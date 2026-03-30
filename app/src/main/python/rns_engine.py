@@ -2,43 +2,50 @@ import sys, os, csv, io, json, signal, time
 from types import ModuleType
 import importlib.util, importlib.machinery
 
-# --- THE CATCH-ALL DUMMY MOCK ---
+# --- THE LENGTH-AWARE DUMMY MOCK ---
 class Dummy:
     def __init__(self, name):
         self.__name__ = name
         self.__spec__ = importlib.machinery.ModuleSpec(name, None)
+    
     def __getattr__(self, name): 
+        # If Reticulum asks for these specific list-producers, return a real empty list
+        if name in ["get_usb_device_list", "get_ports_list", "list_dialout_group"]:
+            return lambda: []
         return self
+    
     def __call__(self, *args, **kwargs): 
         return self
+    
+    def __len__(self):
+        # Fixes the "object of type 'Dummy' has no len()" error
+        return 0
+    
+    def __getitem__(self, index):
+        # Allows iteration if Reticulum tries to loop over a mock result
+        return self
 
-def mock_module(name, use_dummy=False):
-    if use_dummy:
-        mock = Dummy(name)
-    else:
-        mock = ModuleType(name)
-        mock.__spec__ = importlib.machinery.ModuleSpec(name, None)
+def mock_module(name):
+    mock = Dummy(name)
     sys.modules[name] = mock
     return mock
 
 # 1. Mock usbserial4a
 usbserial_mock = mock_module("usbserial4a")
 usbserial_mock.serial4a = Dummy("serial4a")
-usbserial_mock.get_ports_list = lambda: []
 
 # 2. Mock jnius
 jnius_mock = mock_module("jnius")
 jnius_mock.autoclass = lambda x: Dummy("DummyClass")
 jnius_mock.cast = lambda x, y: x
 
-# 3. Mock usb4a and the deep 'usb' submodule as a Catch-All Dummy
-# This satisfies: from usb4a import usb AND usb.get_usb_device()
+# 3. Mock usb4a and the deep 'usb' submodule
 usb4a_mock = mock_module("usb4a")
 usb4a_inner = Dummy("usb4a.usb") 
 usb4a_mock.usb = usb4a_inner
 sys.modules["usb4a.usb"] = usb4a_inner
 
-# 4. Overload find_spec
+# 4. Overload find_spec to satisfy importlib
 _orig_find_spec = importlib.util.find_spec
 def _mock_find_spec(name, package=None):
     if name in ["usbserial4a", "jnius", "usb4a", "usb4a.usb"]:
@@ -47,7 +54,6 @@ def _mock_find_spec(name, package=None):
 importlib.util.find_spec = _mock_find_spec
 
 # --- RNS ENGINE ---
-# Disable signals for Android compatibility
 signal.signal = lambda sig, handler: None
 
 import RNS, LXMF
@@ -64,7 +70,6 @@ def start_engine(service_obj, storage_path, radio_params_json):
     sf = params.get("sf", 7)
     cr = params.get("cr", 5)
 
-    # Configuration for RNode over TCP Bridge
     config = f"""
 [reticulum]
 enable_transport = True
@@ -86,7 +91,6 @@ share_instance = Yes
         f_out.write(config)
 
     try:
-        # Initialize Reticulum
         RNS.Reticulum(configdir=rns_dir)
         
         id_path = os.path.join(storage_path, "storage_identity")
