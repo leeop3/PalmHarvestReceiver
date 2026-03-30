@@ -49,16 +49,19 @@ class MainActivity : AppCompatActivity() {
         observeStatus()
     }
 
-    override fun onCreateOptionsMenu(menu: Menu): Boolean {
-        menu.add(0, 1, 0, "Connect RNode")
-        return true
-    }
-
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
-        if (item.itemId == 1) {
-            requestBtPerms()
-            return true
-        }
+    return when (item.itemId) {
+        1 -> { requestBtPerms(); true }
+        2 -> { RadioSettingsDialog().show(supportFragmentManager, "settings"); true }
+        else -> super.onOptionsItemSelected(item)
+    }
+}
+
+override fun onCreateOptionsMenu(menu: Menu): Boolean {
+    menu.add(0, 1, 0, "Connect RNode")
+    menu.add(0, 2, 0, "Radio Settings") // New Settings Button
+    return true
+}
         return super.onOptionsItemSelected(item)
     }
 

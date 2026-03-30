@@ -1,0 +1,25 @@
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:padding="16dp">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Frequency (Hz)" />
+        <EditText android:id="@+id/editFreq" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="number" android:text="915000000" />
+
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Bandwidth (Hz)" android:layout_marginTop="8dp"/>
+        <Spinner android:id="@+id/spinBw" android:layout_width="match_parent" android:layout_height="wrap_content" android:entries="@array/bw_options" />
+
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="TX Power (dBm)" android:layout_marginTop="8dp"/>
+        <EditText android:id="@+id/editTx" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="number" android:text="20" />
+
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Spreading Factor" android:layout_marginTop="8dp"/>
+        <Spinner android:id="@+id/spinSf" android:layout_width="match_parent" android:layout_height="wrap_content" android:entries="@array/sf_options" />
+
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Coding Rate" android:layout_marginTop="8dp"/>
+        <Spinner android:id="@+id/spinCr" android:layout_width="match_parent" android:layout_height="wrap_content" android:entries="@array/cr_options" />
+    </LinearLayout>
+</ScrollView>

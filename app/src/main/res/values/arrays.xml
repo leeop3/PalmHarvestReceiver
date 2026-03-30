@@ -1,0 +1,5 @@
+<resources>
+    <string-array name="bw_options"><item>125000</item><item>250000</item><item>500000</item></string-array>
+    <string-array name="sf_options"><item>7</item><item>8</item><item>9</item><item>10</item><item>11</item><item>12</item></string-array>
+    <string-array name="cr_options"><item>5</item><item>6</item><item>7</item><item>8</item></string-array>
+</resources>
