@@ -1,6 +1,7 @@
 package com.palm.harvest.network
 
 import android.app.*
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
 import android.content.Context
@@ -62,54 +63,61 @@ class RNSReceiverService : Service() {
                 btSocket?.close()
                 tcpServer?.close()
                 
-                // Use the 'Insecure' method from rnshello
+                // Use the 'Insecure' method from rnshello for better compatibility
                 val m = device.javaClass.getMethod("createInsecureRfcommSocket", Int::class.javaPrimitiveType)
                 btSocket = m.invoke(device, 1) as BluetoothSocket
                 btSocket?.connect()
                 
-                // Use Port 7633 from rnshello
+                // Adopt Port 7633 from rnshello
                 tcpServer = ServerSocket()
                 tcpServer?.reuseAddress = true
                 tcpServer?.bind(InetSocketAddress("127.0.0.1", 7633))
                 
                 onStatusUpdate("Bridge 7633 Ready")
                 
-                // Trigger Python
+                // Trigger Python RNS to link to this port
                 injectPythonInterface()
 
                 val client = tcpServer?.accept() ?: return@launch
+                client.tcpNoDelay = true
                 val btIn = btSocket!!.inputStream
                 val btOut = btSocket!!.outputStream
                 val tcpIn = client.inputStream
                 val tcpOut = client.outputStream
 
-                // Pipe BT -> TCP
+                // BT -> TCP Pipe
                 launch {
                     val buf = ByteArray(1024)
                     try {
-                        var r: Int
+                        var r = 0 // FIX: Explicitly initialized
                         while (isActive && btIn.read(buf).also { r = it } != -1) {
-                            tcpOut.write(buf, 0, r)
-                            tcpOut.flush()
+                            if (r > 0) {
+                                tcpOut.write(buf, 0, r)
+                                tcpOut.flush()
+                            }
                         }
-                    } catch (e: Exception) {}
+                    } catch (e: Exception) { Log.e("RNS-BRIDGE", "BT Read Error") }
                 }
 
-                // Pipe TCP -> BT
+                // TCP -> BT Pipe
                 launch {
                     val buf = ByteArray(1024)
                     try {
-                        var r: Int
+                        var r = 0 // FIX: Explicitly initialized
                         while (isActive && tcpIn.read(buf).also { r = it } != -1) {
-                            btOut.write(buf, 0, r)
-                            btOut.flush()
+                            if (r > 0) {
+                                btOut.write(buf, 0, r)
+                                btOut.flush()
+                            }
                         }
-                    } catch (e: Exception) {}
+                    } catch (e: Exception) { Log.e("RNS-BRIDGE", "TCP Read Error") }
                 }
+
+                onStatusUpdate("Mesh Link Established")
 
             } catch (e: Exception) {
-                onStatusUpdate("Bridge Failed")
-                Log.e("PalmHarvest", "Bridge Error", e)
+                onStatusUpdate("Bridge Error")
+                Log.e("PalmHarvest", "BT Bridge fail", e)
             }
         }
     }
@@ -124,6 +132,8 @@ class RNSReceiverService : Service() {
             json.put("tx", prefs.getInt("tx", 20))
             json.put("sf", prefs.getInt("sf", 7))
             json.put("cr", prefs.getInt("cr", 5))
+            
+            // Trigger Python to inject the interface pointing to 7633
             py.getModule("rns_engine").callAttr("inject_rnode", json.toString())
         }
     }
