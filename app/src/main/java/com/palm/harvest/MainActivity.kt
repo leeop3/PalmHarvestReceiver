@@ -12,55 +12,93 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.room.Room
 import com.chaquo.python.Python
+import com.chaquo.python.android.AndroidPlatform
 import com.palm.harvest.data.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.util.*
 import kotlin.concurrent.thread
 
 class MainActivity : ComponentActivity() {
     private lateinit var db: AppDatabase
-    private var statusMsg by mutableStateOf("Ready")
+    private var statusMsg = mutableStateOf("Ready")
+    private val scope = CoroutineScope(Dispatchers.Main)
 
+    @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Initialize Room Database
         db = Room.databaseBuilder(applicationContext, AppDatabase::class.java, "harvest-db").build()
 
         setContent {
-            var selectedTab by remember { mutableStateOf(0) }
+            var selectedTab by remember { mutableIntStateOf(0) }
             val reports by db.harvestDao().getAllReports().collectAsState(initial = emptyList())
             val summaries by db.harvestDao().getSummaries().collectAsState(initial = emptyList())
+            val currentStatus by statusMsg
 
-            Scaffold(
-                topBar = { TopAppBar(title = { Text("Palm Harvest: $statusMsg") }) },
-                bottomBar = {
-                    TabRow(selectedTabIndex = selectedTab) {
-                        Tab(selected = selectedTab == 0, onClick = { selectedTab = 0 }, text = { Text("Incoming") })
-                        Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }, text = { Text("Summary") })
+            MaterialTheme {
+                Scaffold(
+                    topBar = {
+                        TopAppBar(
+                            title = { Text("Palm Harvest: $currentStatus") },
+                            colors = TopAppBarDefaults.topAppBarColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                titleContentColor = MaterialTheme.colorScheme.primary,
+                            )
+                        )
+                    },
+                    bottomBar = {
+                        NavigationBar {
+                            NavigationBarItem(
+                                selected = selectedTab == 0,
+                                onClick = { selectedTab = 0 },
+                                label = { Text("Incoming") },
+                                icon = { /* Icon placeholder */ }
+                            )
+                            NavigationBarItem(
+                                selected = selectedTab == 1,
+                                onClick = { selectedTab = 1 },
+                                label = { Text("Summary") },
+                                icon = { /* Icon placeholder */ }
+                            )
+                        }
                     }
-                }
-            ) { padding ->
-                Column(modifier = Modifier.padding(padding)) {
-                    if (selectedTab == 0) ReportList(reports) else SummaryList(summaries)
+                ) { padding ->
+                    Column(modifier = Modifier.padding(padding)) {
+                        if (selectedTab == 0) ReportList(reports) else SummaryList(summaries)
+                    }
                 }
             }
         }
 
-        // Start Python RNS Engine
+        // Initialize Python
+        if (!Python.isStarted()) {
+            Python.start(AndroidPlatform(this))
+        }
+
+        // Start Python RNS Engine in background
         thread {
-            val py = Python.getInstance()
-            py.getModule("rns_engine").callAttr("start_engine", this, filesDir.absolutePath)
+            try {
+                val py = Python.getInstance()
+                py.getModule("rns_engine").callAttr("start_engine", this, filesDir.absolutePath)
+            } catch (e: Exception) {
+                onStatusUpdate("Python Error: ${e.message}")
+            }
         }
     }
 
     @Composable
     fun ReportList(list: List<HarvestReport>) {
-        LazyColumn {
-            items(list) { item ->
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            items(list, key = { it.id }) { item ->
                 Card(modifier = Modifier.padding(8.dp).fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(8.dp)) {
+                    Column(modifier = Modifier.padding(12.dp)) {
                         Text("Harvester: ${item.harvesterId}", style = MaterialTheme.typography.titleMedium)
-                        Text("Block: ${item.blockId} | Ripe: ${item.ripeBunches} | Empty: ${item.emptyBunches}")
-                        Text("Time: ${Date(item.timestamp * 1000)}")
+                        Text("Block: ${item.blockId}", style = MaterialTheme.typography.bodyMedium)
+                        Text("Ripe: ${item.ripeBunches} | Empty: ${item.emptyBunches}", style = MaterialTheme.typography.bodySmall)
+                        Text("Time: ${Date(item.timestamp * 1000)}", style = MaterialTheme.typography.labelSmall)
                     }
                 }
             }
@@ -69,19 +107,26 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     fun SummaryList(list: List<HarvesterSummary>) {
-        LazyColumn {
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
             items(list) { item ->
                 ListItem(
                     headlineContent = { Text("Harvester: ${item.harvesterId}") },
-                    supportingContent = { Text("Reports: ${item.reportCount} | Total Ripe: ${item.totalRipe}") }
+                    supportingContent = { Text("Total Ripe: ${item.totalRipe} | Reports: ${item.reportCount}") },
+                    trailingContent = { Text("Daily Total") }
                 )
             }
         }
     }
 
-    fun onStatusUpdate(msg: String) { statusMsg = msg }
+    // Callbacks from Python
+    fun onStatusUpdate(msg: String) {
+        scope.launch { statusMsg.value = msg }
+    }
+
     fun onHarvestReceived(id: String, hId: String, bId: String, ripe: Int, empty: Int, lat: Double, lon: Double, ts: Long, photo: String) {
         val report = HarvestReport(id, hId, bId, ripe, empty, lat, lon, ts, photo)
-        kotlinx.coroutines.GlobalScope.launch { db.harvestDao().insert(report) }
+        CoroutineScope(Dispatchers.IO).launch {
+            db.harvestDao().insert(report)
+        }
     }
 }
