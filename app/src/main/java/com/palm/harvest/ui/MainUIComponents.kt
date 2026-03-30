@@ -1,5 +1,6 @@
 package com.palm.harvest.ui
 
+import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -14,7 +15,7 @@ import androidx.viewpager2.adapter.FragmentStateAdapter
 import com.palm.harvest.R
 import com.palm.harvest.data.HarvestReport
 
-// 1. THE ADAPTER (Fixes the crash)
+// 1. THE VIEW PAGER ADAPTER
 class MainPagerAdapter(activity: FragmentActivity) : FragmentStateAdapter(activity) {
     override fun getItemCount(): Int = 2
     override fun createFragment(position: Int): Fragment {
@@ -27,8 +28,7 @@ class IncomingFragment : Fragment(R.layout.fragment_incoming) {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
         val rv = view.findViewById<RecyclerView>(R.id.recyclerViewIncoming)
-        rv.layoutManager = LinearLayoutManager(context)
-        // Data observation logic will go here
+        rv?.layoutManager = LinearLayoutManager(context)
     }
 }
 
@@ -37,7 +37,6 @@ class SummaryFragment : Fragment(R.layout.fragment_summary) {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
         val rv = view.findViewById<RecyclerView>(R.id.recyclerViewSummary)
-        rv.layoutManager = LinearLayoutManager(context)
-        // Data observation logic will go here
+        rv?.layoutManager = LinearLayoutManager(context)
     }
 }
