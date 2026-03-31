@@ -73,10 +73,16 @@ class NodeAdapter(private val onLocalClick: (String) -> Unit) : RecyclerView.Ada
     private var nodes: List<DiscoveredNode> = emptyList()
 
     fun setLocalAddress(addr: String?) { 
-        if (addr != null) { this.localAddr = addr; notifyItemChanged(0) }
+        if (addr != null && addr != this.localAddr) { 
+            this.localAddr = addr
+            notifyDataSetChanged() 
+        }
     }
     fun setDiscoveredNodes(newList: List<DiscoveredNode>?) { 
-        if (newList != null) { this.nodes = newList; notifyDataSetChanged() }
+        if (newList != null && newList != this.nodes) { 
+            this.nodes = newList
+            notifyDataSetChanged() 
+        }
     }
 
     override fun getItemCount() = nodes.size + 1
@@ -112,9 +118,8 @@ class IncomingFragment : Fragment(R.layout.fragment_incoming) {
         val adp = IncomingAdapter()
         rv?.layoutManager = LinearLayoutManager(requireContext())
         rv?.adapter = adp
-        val db = AppDatabase.getDatabase(requireContext().applicationContext)
-        db.harvestDao().getAllReports().observe(viewLifecycleOwner) { data ->
-            data?.let { adp.submitList(it) }
+        AppDatabase.getDatabase(requireContext().applicationContext).harvestDao().getAllReports().observe(viewLifecycleOwner) { data ->
+            data?.let { rv?.post { adp.submitList(it) } }
         }
     }
 }
@@ -126,9 +131,8 @@ class SummaryFragment : Fragment(R.layout.fragment_summary) {
         val adp = SummaryAdapter()
         rv?.layoutManager = LinearLayoutManager(requireContext())
         rv?.adapter = adp
-        val db = AppDatabase.getDatabase(requireContext().applicationContext)
-        db.harvestDao().getBlockSummaries().observe(viewLifecycleOwner) { data ->
-            data?.let { adp.submitList(it) }
+        AppDatabase.getDatabase(requireContext().applicationContext).harvestDao().getBlockSummaries().observe(viewLifecycleOwner) { data ->
+            data?.let { rv?.post { adp.submitList(it) } }
         }
     }
 }
@@ -140,13 +144,12 @@ class NodesFragment : Fragment(R.layout.fragment_nodes) {
         val adp = NodeAdapter { addr -> showQr(addr) }
         rv?.layoutManager = LinearLayoutManager(requireContext())
         rv?.adapter = adp
-        val db = AppDatabase.getDatabase(requireContext().applicationContext)
         
         RNSReceiverService.localAddress.observe(viewLifecycleOwner) { addr ->
-            adp.setLocalAddress(addr)
+            rv?.post { adp.setLocalAddress(addr) }
         }
-        db.harvestDao().getAllNodes().observe(viewLifecycleOwner) { data ->
-            adp.setDiscoveredNodes(data)
+        AppDatabase.getDatabase(requireContext().applicationContext).harvestDao().getAllNodes().observe(viewLifecycleOwner) { data ->
+            rv?.post { adp.setDiscoveredNodes(data) }
         }
     }
 

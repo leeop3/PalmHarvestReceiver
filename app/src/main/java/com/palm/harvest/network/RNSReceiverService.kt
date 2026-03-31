@@ -154,7 +154,7 @@ class RNSReceiverService : Service() {
 
     fun onNodeDiscovered(hash: String, nickname: String) {
         serviceScope.launch {
-            try { db.harvestDao().upsertNode(hash, nickname, System.currentTimeMillis()) } catch (e: Exception) {}
+            try { db.harvestDao().trackNode(hash, nickname, System.currentTimeMillis()) } catch (e: Exception) {}
         }
     }
 

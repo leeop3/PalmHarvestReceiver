@@ -59,22 +59,32 @@ interface HarvestDao {
     """)
     fun getBlockSummaries(): LiveData<List<BlockSummary>>
 
-    // THE UPSERT: If node exists, increment count and update time. If new, insert it.
-    @Query("""
-        INSERT INTO discovered_nodes (hash, nickname, firstSeen, lastSeen, announceCount)
-        VALUES (:hash, :nickname, :time, :time, 1)
-        ON CONFLICT(hash) DO UPDATE SET 
-            nickname = excluded.nickname, 
-            lastSeen = excluded.lastSeen, 
-            announceCount = announceCount + 1
-    """)
-    suspend fun upsertNode(hash: String, nickname: String, time: Long)
+    // SAFE UPSERT METHOD: Works on ALL Android versions
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertNode(node: DiscoveredNode)
+
+    @Update
+    suspend fun updateNode(node: DiscoveredNode)
+
+    @Query("SELECT * FROM discovered_nodes WHERE hash = :hash LIMIT 1")
+    suspend fun getNode(hash: String): DiscoveredNode?
+
+    @Transaction
+    suspend fun trackNode(hash: String, nickname: String, time: Long) {
+        val existing = getNode(hash)
+        if (existing != null) {
+            updateNode(existing.copy(nickname = nickname, lastSeen = time, announceCount = existing.announceCount + 1))
+        } else {
+            insertNode(DiscoveredNode(hash, nickname, time, time, 1))
+        }
+    }
 
     @Query("SELECT * FROM discovered_nodes ORDER BY lastSeen DESC")
     fun getAllNodes(): LiveData<List<DiscoveredNode>>
 }
 
-@Database(entities = [HarvestReport::class, DiscoveredNode::class], version = 6, exportSchema = false)
+// BUMPED TO VERSION 7 to clear out any corrupted tables
+@Database(entities =[HarvestReport::class, DiscoveredNode::class], version = 7, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun harvestDao(): HarvestDao
 
