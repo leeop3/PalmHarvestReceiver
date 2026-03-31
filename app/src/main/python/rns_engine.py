@@ -5,7 +5,7 @@ import importlib.util, importlib.machinery
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=ResourceWarning)
 
-# --- 1. THE ULTIMATE ANDROID MOCKS (LOCKED) ---
+# --- 1. MOCKS (LOCKED) ---
 class Dummy:
     def __init__(self, name="Dummy"):
         self.__name__ = name
@@ -46,10 +46,9 @@ signal.signal = lambda sig, handler: None
 
 kotlin_cb = None
 local_destination = None
-# CRITICAL: Keep a global reference to the handler so it isn't garbage collected
 discovery_handler_inst = None 
 
-# --- 3. ROBUST DISCOVERY HANDLER ---
+# --- 3. DISCOVERY HANDLER ---
 class MeshDiscoveryHandler:
     def __init__(self):
         self.aspect_filter = None 
@@ -57,18 +56,19 @@ class MeshDiscoveryHandler:
     def received_announce(self, destination_hash, announced_identity, app_data):
         try:
             h = RNS.hexrep(destination_hash, False)
+            print(f"RNS-LOG: RAW ANNOUNCE RECEIVED FROM {h}")
+            
             n = "Unknown Harvester"
             if app_data:
-                try: n = app_data.decode("utf-8")
-                except: n = f"Node {h[:8]}"
-            
-            # Log to ADB so we can see it even if UI fails
-            print(f"RNS-LOG: DISCOVERY EVENT -> {h} ({n})")
+                try: 
+                    n = app_data.decode("utf-8")
+                except: 
+                    n = f"Node {h[:8]}"
             
             if kotlin_cb:
                 kotlin_cb.onNodeDiscovered(h, n)
         except Exception as e:
-            print(f"RNS-LOG: Discovery logic error: {e}")
+            print(f"RNS-LOG: Discovery error: {e}")
 
 def start_engine(service_obj, storage_path, radio_params_json=None):
     global kotlin_cb, local_destination, discovery_handler_inst
@@ -79,9 +79,11 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
         if os.path.exists(rns_dir): shutil.rmtree(rns_dir)
         os.makedirs(rns_dir)
         if not os.path.exists(lxmf_dir): os.makedirs(lxmf_dir)
+        
         with open(os.path.join(rns_dir, "config"), "w") as f:
             f.write("[reticulum]\nenable_transport = True\nshare_instance = Yes\n\n[interfaces]\n")
         
+        # Start RNS with Debug Logging
         RNS.Reticulum(configdir=rns_dir, loglevel=RNS.LOG_DEBUG)
         
         id_path = os.path.join(storage_path, "storage_identity")
@@ -92,7 +94,7 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
         local_destination = router.register_delivery_identity(local_id, display_name="PalmReceiver")
         router.register_delivery_callback(on_lxmf)
         
-        # FIX: Store instance in global variable discovery_handler_inst
+        # Register Discovery Handler globally
         discovery_handler_inst = MeshDiscoveryHandler()
         RNS.Transport.register_announce_handler(discovery_handler_inst)
         
@@ -105,23 +107,39 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
 def inject_rnode(radio_params_json):
     try:
         params = json.loads(radio_params_json)
+        # REQUESTED DEFAULTS: 433MHz, 125kHz, 17TX, 8SF, 6CR
         ictx = {
-            "name": "Android RNode Bridge", "type": "RNodeInterface", "interface_enabled": True, "outgoing": True,
-            "tcp_host": "127.0.0.1", "tcp_port": 7633, "frequency": int(params.get("freq", 915000000)),
-            "bandwidth": int(params.get("bw", 125000)), "txpower": int(params.get("tx", 20)),
-            "spreadingfactor": int(params.get("sf", 7)), "codingrate": int(params.get("cr", 5)), "flow_control": False
+            "name": "Android RNode Bridge",
+            "type": "RNodeInterface",
+            "interface_enabled": True,
+            "outgoing": True,
+            "tcp_host": "127.0.0.1",
+            "tcp_port": 7633,
+            "frequency": int(params.get("freq", 433000000)),
+            "bandwidth": int(params.get("bw", 125000)),
+            "txpower": int(params.get("tx", 17)),
+            "spreadingfactor": int(params.get("sf", 8)),
+            "codingrate": int(params.get("cr", 6)),
+            "flow_control": False
         }
+        print(f"RNS-LOG: Injecting RNode {ictx['frequency']/1000000}MHz SF{ictx['spreadingfactor']}")
+        
         ifac = RNodeInterface(RNS.Transport, ictx)
         ifac.mode = Interface.MODE_FULL
-        # CRITICAL: Force IN and OUT flags
         ifac.IN = True
         ifac.OUT = True
         RNS.Transport.interfaces.append(ifac)
         
+        # Immediate announce to wake up the mesh
         time.sleep(2)
-        if local_destination: local_destination.announce()
+        if local_destination: 
+            local_destination.announce()
+            print("RNS-LOG: Local announce broadcasted.")
+            
         return "RNode Active"
-    except Exception as e: return f"Link Failed: {str(e)}"
+    except Exception as e:
+        print(f"RNS-LOG: Link Error: {e}")
+        return f"Link Failed: {str(e)}"
 
 def on_lxmf(lxm):
     try:

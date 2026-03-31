@@ -26,8 +26,8 @@ class RadioSettingsDialog : DialogFragment() {
         val spinCr = view.findViewById<Spinner>(R.id.spinCr)
 
         // Set current values
-        editFreq.setText(prefs.getInt("freq", 915000000).toString())
-        editTx.setText(prefs.getInt("tx", 20).toString())
+        editFreq.setText(prefs.getInt("freq", 433000000).toString())
+        editTx.setText(prefs.getInt("tx", 17).toString())
 
         builder.setView(view)
             .setTitle("RNode Radio Settings")
