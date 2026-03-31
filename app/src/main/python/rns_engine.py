@@ -1,4 +1,4 @@
-import sys, os, csv, io, json, signal, warnings, shutil, traceback, platform
+import sys, os, csv, io, json, signal, warnings, shutil, traceback
 from types import ModuleType
 import importlib.util, importlib.machinery
 
@@ -6,6 +6,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=ResourceWarning)
 
 # --- 1. MOCKS (LOCKED) ---
+# We keep these to prevent USB driver crashes, but we do NOT lie about being on Linux.
 class Dummy:
     def __init__(self, name="Dummy"):
         self.__name__ = name
@@ -33,11 +34,6 @@ importlib.util.find_spec = _mock_find_spec
 
 # --- 2. IMPORT RNS ---
 import RNS
-try:
-    import RNS.vendor.platformutils as pu
-    pu.is_android = lambda: False
-except: pass
-
 from LXMF import LXMRouter
 from RNS.Interfaces.Android.RNodeInterface import RNodeInterface
 from RNS.Interfaces.Interface import Interface
@@ -92,7 +88,7 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
         
         router = LXMRouter(identity=local_id, storagepath=lxmf_dir)
         local_destination = router.register_delivery_identity(local_id, display_name="PalmReceiver")
-        router.register_delivery_callback(on_lxmf)
+        router.register_delivery_callback(lambda lxm: on_lxmf(lxm, service_obj))
         
         # Register Discovery Handler globally
         discovery_handler_inst = MeshDiscoveryHandler()
@@ -107,7 +103,8 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
 def inject_rnode(radio_params_json):
     try:
         params = json.loads(radio_params_json)
-        # REQUESTED DEFAULTS: 433MHz, 125kHz, 17TX, 8SF, 6CR
+        import time
+        # DEFAULTS: 433MHz, 125kHz, 17TX, 8SF, 6CR
         ictx = {
             "name": "Android RNode Bridge",
             "type": "RNodeInterface",
@@ -141,15 +138,15 @@ def inject_rnode(radio_params_json):
         print(f"RNS-LOG: Link Error: {e}")
         return f"Link Failed: {str(e)}"
 
-def on_lxmf(lxm):
+def on_lxmf(lxm, service_obj):
     try:
         content = lxm.content.decode("utf-8")
         if "harvester_id" in content:
             f_io = io.StringIO(content)
             reader = csv.DictReader(f_io)
             for row in reader:
-                if kotlin_cb:
-                    kotlin_cb.onHarvestReceived(
+                if service_obj:
+                    service_obj.onHarvestReceived(
                         row.get('id', ''), row.get('harvester_id', ''), row.get('block_id', ''),
                         row.get('ripe_bunches', '0'), row.get('empty_bunches', '0'),
                         row.get('latitude', '0.0'), row.get('longitude', '0.0'),
