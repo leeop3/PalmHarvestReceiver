@@ -43,37 +43,35 @@ from RNS.Interfaces.Android.RNodeInterface import RNodeInterface
 from RNS.Interfaces.Interface import Interface
 
 signal.signal = lambda sig, handler: None
+
 kotlin_cb = None
 local_destination = None
+# CRITICAL: Keep a global reference to the handler so it isn't garbage collected
+discovery_handler_inst = None 
 
 # --- 3. ROBUST DISCOVERY HANDLER ---
 class MeshDiscoveryHandler:
     def __init__(self):
-        # Setting aspect_filter to None means we hear ALL announces on the network
         self.aspect_filter = None 
 
     def received_announce(self, destination_hash, announced_identity, app_data):
         try:
-            handler_hash = RNS.hexrep(destination_hash, False)
-            
-            # Extract nickname from app_data
-            display_name = "Unknown Harvester"
+            h = RNS.hexrep(destination_hash, False)
+            n = "Unknown Harvester"
             if app_data:
-                try:
-                    display_name = app_data.decode("utf-8")
-                except:
-                    display_name = f"Node {handler_hash[:8]}"
+                try: n = app_data.decode("utf-8")
+                except: n = f"Node {h[:8]}"
             
-            print(f"RNS-LOG: DISCOVERY DETECTED -> {handler_hash} ({display_name})")
+            # Log to ADB so we can see it even if UI fails
+            print(f"RNS-LOG: DISCOVERY EVENT -> {h} ({n})")
             
-            # Send to Kotlin UI
             if kotlin_cb:
-                kotlin_cb.onNodeDiscovered(handler_hash, display_name)
+                kotlin_cb.onNodeDiscovered(h, n)
         except Exception as e:
-            print(f"RNS-LOG: Discovery processing error: {e}")
+            print(f"RNS-LOG: Discovery logic error: {e}")
 
 def start_engine(service_obj, storage_path, radio_params_json=None):
-    global kotlin_cb, local_destination
+    global kotlin_cb, local_destination, discovery_handler_inst
     kotlin_cb = service_obj
     try:
         rns_dir = os.path.join(storage_path, ".reticulum")
@@ -94,10 +92,9 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
         local_destination = router.register_delivery_identity(local_id, display_name="PalmReceiver")
         router.register_delivery_callback(on_lxmf)
         
-        # CRITICAL: Register the Discovery Handler directly to RNS Transport
-        discovery_handler = MeshDiscoveryHandler()
-        RNS.Transport.register_announce_handler(discovery_handler)
-        print("RNS-LOG: Discovery Handler registered to Transport.")
+        # FIX: Store instance in global variable discovery_handler_inst
+        discovery_handler_inst = MeshDiscoveryHandler()
+        RNS.Transport.register_announce_handler(discovery_handler_inst)
         
         addr = RNS.hexrep(local_destination.hash, False)
         service_obj.onStatusUpdate(f"RNS Online: {addr}")
@@ -116,15 +113,13 @@ def inject_rnode(radio_params_json):
         }
         ifac = RNodeInterface(RNS.Transport, ictx)
         ifac.mode = Interface.MODE_FULL
-        ifac.IN = True; ifac.OUT = True
+        # CRITICAL: Force IN and OUT flags
+        ifac.IN = True
+        ifac.OUT = True
         RNS.Transport.interfaces.append(ifac)
         
-        # Announce ourselves so others discover us too
         time.sleep(2)
-        if local_destination: 
-            local_destination.announce()
-            print("RNS-LOG: Sent local announce to mesh.")
-            
+        if local_destination: local_destination.announce()
         return "RNode Active"
     except Exception as e: return f"Link Failed: {str(e)}"
 
