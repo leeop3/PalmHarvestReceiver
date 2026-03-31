@@ -8,17 +8,15 @@ import android.content.Intent
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.MutableLiveData
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
-import com.palm.harvest.data.AppDatabase
-import com.palm.harvest.data.DiscoveredNode
-import com.palm.harvest.data.HarvestReport
+import com.palm.harvest.data.*
 import kotlinx.coroutines.*
 import java.net.InetSocketAddress
 import java.net.ServerSocket
+import java.util.*
 import org.json.JSONObject
 
 class RNSReceiverService : Service() {
@@ -29,7 +27,6 @@ class RNSReceiverService : Service() {
     private lateinit var db: AppDatabase
 
     companion object {
-        // Explicitly defining LiveData variables
         val serviceStatus = MutableLiveData("Stopped")
         val localAddress = MutableLiveData("Waiting for RNS...")
         const val CHANNEL_ID = "RNS_SERVICE_CHANNEL"
@@ -44,9 +41,7 @@ class RNSReceiverService : Service() {
         if (intent?.action == ACTION_CONNECT) {
             val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 intent.getParcelableExtra(EXTRA_DEVICE, BluetoothDevice::class.java)
-            } else {
-                @Suppress("DEPRECATION") intent.getParcelableExtra(EXTRA_DEVICE)
-            }
+            } else { @Suppress("DEPRECATION") intent.getParcelableExtra(EXTRA_DEVICE) }
             device?.let { startBridge(it) }
         }
         return START_STICKY
@@ -56,24 +51,18 @@ class RNSReceiverService : Service() {
         serviceScope.launch(Dispatchers.IO) {
             try {
                 onStatusUpdate("Connecting BT...")
-                btSocket?.close()
-                tcpServer?.close()
-                
+                btSocket?.close(); tcpServer?.close()
                 val m = device.javaClass.getMethod("createInsecureRfcommSocket", Int::class.javaPrimitiveType)
                 btSocket = m.invoke(device, 1) as BluetoothSocket
                 btSocket?.connect()
-                
                 tcpServer = ServerSocket()
                 tcpServer?.reuseAddress = true
                 tcpServer?.bind(InetSocketAddress("127.0.0.1", 7633))
-                
-                onStatusUpdate("Bridge 7633 Listening")
+                onStatusUpdate("Bridge 7633 Ready")
                 launch { handleTcpClients() }
                 delay(500)
                 injectPythonInterface()
-            } catch (e: Exception) {
-                onStatusUpdate("Bridge Error")
-            }
+            } catch (e: Exception) { onStatusUpdate("Bridge Error") }
         }
     }
 
@@ -84,26 +73,10 @@ class RNSReceiverService : Service() {
                     val client = tcpServer?.accept() ?: break
                     client.tcpNoDelay = true
                     onStatusUpdate("Mesh Link Active")
-
-                    val btIn = btSocket!!.inputStream
-                    val btOut = btSocket!!.outputStream
-                    val tcpIn = client.inputStream
-                    val tcpOut = client.outputStream
-
-                    launch {
-                        val buf = ByteArray(2048)
-                        var r = 0
-                        while (isActive && btIn.read(buf).also { r = it } != -1) {
-                            if (r > 0) { tcpOut.write(buf, 0, r); tcpOut.flush() }
-                        }
-                    }
-                    launch {
-                        val buf = ByteArray(2048)
-                        var r = 0
-                        while (isActive && tcpIn.read(buf).also { r = it } != -1) {
-                            if (r > 0) { btOut.write(buf, 0, r); btOut.flush() }
-                        }
-                    }
+                    val btIn = btSocket!!.inputStream; val btOut = btSocket!!.outputStream
+                    val tcpIn = client.inputStream; val tcpOut = client.outputStream
+                    launch { val buf = ByteArray(2048); var r = 0; while (isActive && btIn.read(buf).also { r = it } != -1) { if (r > 0) { tcpOut.write(buf, 0, r); tcpOut.flush() } } }
+                    launch { val buf = ByteArray(2048); var r = 0; while (isActive && tcpIn.read(buf).also { r = it } != -1) { if (r > 0) { btOut.write(buf, 0, r); btOut.flush() } } }
                 } catch (e: Exception) { break }
             }
         }
@@ -121,9 +94,7 @@ class RNSReceiverService : Service() {
                 json.put("sf", prefs.getInt("sf", 7))
                 json.put("cr", prefs.getInt("cr", 5))
                 py.getModule("rns_engine").callAttr("inject_rnode", json.toString())
-            } catch (e: Exception) {
-                Log.e("RNS", "Python error", e)
-            }
+            } catch (e: Exception) {}
         }
     }
 
@@ -137,45 +108,42 @@ class RNSReceiverService : Service() {
     }
 
     private fun startRnsEngine() {
-        serviceScope.launch {
-            val py = Python.getInstance()
-            py.getModule("rns_engine").callAttr("start_engine", this@RNSReceiverService, filesDir.absolutePath)
-        }
+        serviceScope.launch { Python.getInstance().getModule("rns_engine").callAttr("start_engine", this@RNSReceiverService, filesDir.absolutePath) }
     }
 
-    fun onStatusUpdate(msg: String) {
-        serviceStatus.postValue(msg)
-        updateNotification(msg)
-    }
-
-    fun updateLocalAddress(addr: String) {
-        localAddress.postValue(addr)
-    }
-
+    fun onStatusUpdate(msg: String) { serviceStatus.postValue(msg); updateNotification(msg) }
+    fun updateLocalAddress(addr: String) { localAddress.postValue(addr) }
     fun onNodeDiscovered(hash: String, nickname: String) {
+        serviceScope.launch { try { db.harvestDao().trackNode(hash, nickname, System.currentTimeMillis()) } catch (e: Exception) {} }
+    }
+
+    fun onHarvestReceived(id: String, hId: String, bId: String, ripe: String, empty: String, lat: String, lon: String, ts: String, photo: String, raw: String) {
         serviceScope.launch {
-            try { db.harvestDao().trackNode(hash, nickname, System.currentTimeMillis()) } catch (e: Exception) {}
+            try {
+                // Extract yyyy-MM-dd from the timestamp string for the summary grouping
+                val reportDate = if (ts.length >= 10) ts.substring(0, 10) else "Unknown"
+                val record = HarvestRecord(
+                    externalId = id,
+                    harvesterId = hId,
+                    blockId = bId,
+                    ripeBunches = ripe.toIntOrNull() ?: 0,
+                    emptyBunches = empty.toIntOrNull() ?: 0,
+                    latitude = lat.toDoubleOrNull() ?: 0.0,
+                    longitude = lon.toDoubleOrNull() ?: 0.0,
+                    timestamp = ts,
+                    reportDate = reportDate,
+                    photoFile = photo,
+                    rawCsv = raw
+                )
+                db.harvestDao().insertReport(record)
+            } catch (e: Exception) {}
         }
     }
 
-    fun onHarvestReceived(id: String, hId: String, bId: String, ripe: Int, empty: Int, lat: Double, lon: Double, ts: Long, photo: String) {
-        serviceScope.launch {
-            try { db.harvestDao().insertReport(HarvestReport(id, hId, bId, ripe, empty, lat, lon, ts, photo)) } catch (e: Exception) {}
-        }
-    }
-
-    private fun updateNotification(content: String) {
-        getSystemService(NotificationManager::class.java).notify(1, createNotification(content))
-    }
-
+    private fun updateNotification(content: String) { getSystemService(NotificationManager::class.java).notify(1, createNotification(content)) }
     private fun createNotification(content: String): Notification {
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Palm Harvest Receiver")
-            .setContentText(content)
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setOngoing(true).build()
+        return NotificationCompat.Builder(this, CHANNEL_ID).setContentTitle("Palm Harvest Receiver").setContentText(content).setSmallIcon(android.R.drawable.stat_notify_sync).setOngoing(true).build()
     }
-
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(CHANNEL_ID, "RNS Service", NotificationManager.IMPORTANCE_LOW)
