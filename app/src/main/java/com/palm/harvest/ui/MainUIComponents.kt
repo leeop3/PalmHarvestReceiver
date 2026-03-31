@@ -30,7 +30,7 @@ class MainPagerAdapter(activity: FragmentActivity) : androidx.viewpager2.adapter
     }
 }
 
-class IncomingAdapter : ListAdapter<HarvestReport, IncomingAdapter.VH>(Diff()) {
+class IncomingAdapter : ListAdapter<HarvestRecord, IncomingAdapter.VH>(Diff()) {
     class VH(v: View) : RecyclerView.ViewHolder(v) {
         val t: TextView? = v.findViewById(R.id.txtHarvester)
         val b: TextView? = v.findViewById(R.id.txtBlock)
@@ -38,14 +38,15 @@ class IncomingAdapter : ListAdapter<HarvestReport, IncomingAdapter.VH>(Diff()) {
     }
     override fun onCreateViewHolder(p: ViewGroup, t: Int) = VH(LayoutInflater.from(p.context).inflate(R.layout.item_harvest, p, false))
     override fun onBindViewHolder(h: VH, p: Int) {
-        val i = getItem(p); val df = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+        val i = getItem(p)
         h.t?.text = "Harvester: ${i.harvesterId}"
         h.b?.text = "Block: ${i.blockId}"
-        h.s?.text = "Total: ${i.ripeBunches + i.emptyBunches} | Time: ${df.format(Date(i.timestamp * 1000))}"
+        // FIX: Displaying the timestamp string directly
+        h.s?.text = "Total: ${i.ripeBunches + i.emptyBunches} | Time: ${i.timestamp}"
     }
-    class Diff : DiffUtil.ItemCallback<HarvestReport>() {
-        override fun areItemsTheSame(o: HarvestReport, n: HarvestReport) = o.id == n.id
-        override fun areContentsTheSame(o: HarvestReport, n: HarvestReport) = o == n
+    class Diff : DiffUtil.ItemCallback<HarvestRecord>() {
+        override fun areItemsTheSame(o: HarvestRecord, n: HarvestRecord) = o.localId == n.localId
+        override fun areContentsTheSame(o: HarvestRecord, n: HarvestRecord) = o == n
     }
 }
 
@@ -73,16 +74,10 @@ class NodeAdapter(private val onLocalClick: (String) -> Unit) : RecyclerView.Ada
     private var nodes: List<DiscoveredNode> = emptyList()
 
     fun setLocalAddress(addr: String?) { 
-        if (addr != null && addr != this.localAddr) { 
-            this.localAddr = addr
-            notifyDataSetChanged() 
-        }
+        if (addr != null && addr != this.localAddr) { this.localAddr = addr; notifyItemChanged(0) }
     }
     fun setDiscoveredNodes(newList: List<DiscoveredNode>?) { 
-        if (newList != null && newList != this.nodes) { 
-            this.nodes = newList
-            notifyDataSetChanged() 
-        }
+        if (newList != null) { this.nodes = newList; notifyDataSetChanged() }
     }
 
     override fun getItemCount() = nodes.size + 1
@@ -96,8 +91,7 @@ class NodeAdapter(private val onLocalClick: (String) -> Unit) : RecyclerView.Ada
             h.s?.text = "Config Harvesters to this address"
             h.itemView.setOnClickListener { if (!localAddr.contains("Waiting")) onLocalClick(localAddr) }
         } else {
-            val i = nodes[p - 1]
-            val df = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+            val i = nodes[p - 1]; val df = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
             h.t?.text = i.label
             h.b?.text = "Address: ${i.shortAddress} | Anns: ${i.announceCount}"
             h.s?.text = "Last Heard: ${df.format(Date(i.lastSeen))}"
@@ -116,10 +110,9 @@ class IncomingFragment : Fragment(R.layout.fragment_incoming) {
         super.onViewCreated(view, savedInstanceState)
         val rv = view.findViewById<RecyclerView>(R.id.recyclerViewIncoming)
         val adp = IncomingAdapter()
-        rv?.layoutManager = LinearLayoutManager(requireContext())
-        rv?.adapter = adp
-        AppDatabase.getDatabase(requireContext().applicationContext).harvestDao().getAllReports().observe(viewLifecycleOwner) { data ->
-            data?.let { rv?.post { adp.submitList(it) } }
+        rv?.layoutManager = LinearLayoutManager(requireContext()); rv?.adapter = adp
+        AppDatabase.getDatabase(requireContext()).harvestDao().getAllReports().observe(viewLifecycleOwner) { data ->
+            data?.let { adp.submitList(it) }
         }
     }
 }
@@ -129,10 +122,9 @@ class SummaryFragment : Fragment(R.layout.fragment_summary) {
         super.onViewCreated(view, savedInstanceState)
         val rv = view.findViewById<RecyclerView>(R.id.recyclerViewSummary)
         val adp = SummaryAdapter()
-        rv?.layoutManager = LinearLayoutManager(requireContext())
-        rv?.adapter = adp
-        AppDatabase.getDatabase(requireContext().applicationContext).harvestDao().getBlockSummaries().observe(viewLifecycleOwner) { data ->
-            data?.let { rv?.post { adp.submitList(it) } }
+        rv?.layoutManager = LinearLayoutManager(requireContext()); rv?.adapter = adp
+        AppDatabase.getDatabase(requireContext()).harvestDao().getBlockSummaries().observe(viewLifecycleOwner) { data ->
+            data?.let { adp.submitList(it) }
         }
     }
 }
@@ -142,14 +134,10 @@ class NodesFragment : Fragment(R.layout.fragment_nodes) {
         super.onViewCreated(view, savedInstanceState)
         val rv = view.findViewById<RecyclerView>(R.id.recyclerViewNodes)
         val adp = NodeAdapter { addr -> showQr(addr) }
-        rv?.layoutManager = LinearLayoutManager(requireContext())
-        rv?.adapter = adp
-        
-        RNSReceiverService.localAddress.observe(viewLifecycleOwner) { addr ->
-            rv?.post { adp.setLocalAddress(addr) }
-        }
-        AppDatabase.getDatabase(requireContext().applicationContext).harvestDao().getAllNodes().observe(viewLifecycleOwner) { data ->
-            rv?.post { adp.setDiscoveredNodes(data) }
+        rv?.layoutManager = LinearLayoutManager(requireContext()); rv?.adapter = adp
+        RNSReceiverService.localAddress.observe(viewLifecycleOwner) { addr -> adp.setLocalAddress(addr) }
+        AppDatabase.getDatabase(requireContext()).harvestDao().getAllNodes().observe(viewLifecycleOwner) { data ->
+            adp.setDiscoveredNodes(data)
         }
     }
 

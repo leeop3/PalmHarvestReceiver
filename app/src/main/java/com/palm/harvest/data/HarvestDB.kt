@@ -67,6 +67,15 @@ interface HarvestDao {
     """)
     fun getBlockSummaries(): LiveData<List<BlockSummary>>
 
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertNode(node: DiscoveredNode)
+
+    @Update
+    suspend fun updateNode(node: DiscoveredNode)
+
+    @Query("SELECT * FROM discovered_nodes WHERE hash = :hash LIMIT 1")
+    suspend fun getNode(hash: String): DiscoveredNode?
+
     @Transaction
     suspend fun trackNode(hash: String, nickname: String, time: Long) {
         val existing = getNode(hash)
@@ -77,10 +86,9 @@ interface HarvestDao {
         }
     }
 
-    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertNode(node: DiscoveredNode)
-    @Update suspend fun updateNode(node: DiscoveredNode)
-    @Query("SELECT * FROM discovered_nodes WHERE hash = :hash LIMIT 1") suspend fun getNode(hash: String): DiscoveredNode?
-    @Query("SELECT * FROM discovered_nodes ORDER BY lastHeard DESC") fun getAllNodes(): LiveData<List<DiscoveredNode>>
+    // FIX: Changed lastHeard to lastSeen to match the Entity
+    @Query("SELECT * FROM discovered_nodes ORDER BY lastSeen DESC")
+    fun getAllNodes(): LiveData<List<DiscoveredNode>>
 }
 
 @Database(entities = [HarvestRecord::class, DiscoveredNode::class], version = 8, exportSchema = false)
