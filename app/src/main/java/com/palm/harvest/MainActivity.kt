@@ -8,6 +8,7 @@ import android.content.*
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.IBinder
 import android.view.Menu
 import android.view.MenuItem
 import android.widget.Toast
@@ -20,17 +21,11 @@ import com.palm.harvest.databinding.ActivityMainBinding
 import com.palm.harvest.network.RNSReceiverService
 import com.palm.harvest.ui.MainPagerAdapter
 import com.palm.harvest.ui.RadioSettingsDialog
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import androidx.lifecycle.Observer
-import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
 
-    private val btPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { perms ->
+    private val btPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
         if (perms.values.all { it }) showDevicePicker()
         else Toast.makeText(this, "Bluetooth permissions required", Toast.LENGTH_LONG).show()
     }
@@ -41,14 +36,17 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
         setSupportActionBar(binding.toolbar)
 
-        // Setup ViewPager and Tabs
         binding.viewPager.adapter = MainPagerAdapter(this)
         TabLayoutMediator(binding.tabLayout, binding.viewPager) { tab, pos ->
             tab.text = when(pos) { 0 -> "📡 Incoming"; 1 -> "📊 Summary"; else -> "🔍 Nodes" }
         }.attach()
 
         startAndBindService()
-        observeStatus()
+        
+        // Correctly observing LiveData (No Coroutine needed)
+        RNSReceiverService.serviceStatus.observe(this) { status ->
+            binding.statusText.text = status
+        }
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
@@ -59,14 +57,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
-            1 -> {
-                requestBtPerms()
-                true
-            }
-            2 -> {
-                com.palm.harvest.ui.RadioSettingsDialog().show(supportFragmentManager, "radio_settings")
-                true
-            }
+            1 -> { requestBtPerms(); true }
+            2 -> { RadioSettingsDialog().show(supportFragmentManager, "radio_settings"); true }
             else -> super.onOptionsItemSelected(item)
         }
     }
@@ -103,15 +95,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startAndBindService() {
-        val intent = Intent(this, RNSReceiverService::class.java)
-        startService(intent)
-    }
-
-    private fun observeStatus() {
-        CoroutineScope(Dispatchers.Main).launch {
-            RNSReceiverService.serviceStatus.observe(this, Observer { status ->
-                binding.statusText.text = status
-            })
-        }
+        startService(Intent(this, RNSReceiverService::class.java))
     }
 }

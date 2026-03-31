@@ -10,18 +10,15 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.lifecycle.MutableLiveData
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import com.palm.harvest.data.AppDatabase
-import com.palm.harvest.data.HarvestReport
 import com.palm.harvest.data.DiscoveredNode
+import com.palm.harvest.data.HarvestReport
 import kotlinx.coroutines.*
-import androidx.lifecycle.MutableLiveData
-import java.io.IOException
 import java.net.InetSocketAddress
 import java.net.ServerSocket
-import java.util.*
-import androidx.room.Room
 import org.json.JSONObject
 
 class RNSReceiverService : Service() {
@@ -32,17 +29,15 @@ class RNSReceiverService : Service() {
     private lateinit var db: AppDatabase
 
     companion object {
+        // Explicitly defining LiveData variables
         val serviceStatus = MutableLiveData("Stopped")
-        val localAddress = MutableStateFlow("")
+        val localAddress = MutableLiveData("Waiting for RNS...")
         const val CHANNEL_ID = "RNS_SERVICE_CHANNEL"
         const val ACTION_CONNECT = "com.palm.harvest.CONNECT"
         const val EXTRA_DEVICE = "bt_device"
     }
 
-    inner class LocalBinder : Binder() {
-        fun getService(): RNSReceiverService = this@RNSReceiverService
-    }
-
+    inner class LocalBinder : Binder() { fun getService(): RNSReceiverService = this@RNSReceiverService }
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -73,15 +68,11 @@ class RNSReceiverService : Service() {
                 tcpServer?.bind(InetSocketAddress("127.0.0.1", 7633))
                 
                 onStatusUpdate("Bridge 7633 Listening")
-                
                 launch { handleTcpClients() }
-
                 delay(500)
                 injectPythonInterface()
-
             } catch (e: Exception) {
                 onStatusUpdate("Bridge Error")
-                Log.e("PalmHarvest", "Bridge Failed", e)
             }
         }
     }
@@ -103,21 +94,14 @@ class RNSReceiverService : Service() {
                         val buf = ByteArray(2048)
                         var r = 0
                         while (isActive && btIn.read(buf).also { r = it } != -1) {
-                            if (r > 0) {
-                                tcpOut.write(buf, 0, r)
-                                tcpOut.flush()
-                            }
+                            if (r > 0) { tcpOut.write(buf, 0, r); tcpOut.flush() }
                         }
                     }
-
                     launch {
                         val buf = ByteArray(2048)
                         var r = 0
                         while (isActive && tcpIn.read(buf).also { r = it } != -1) {
-                            if (r > 0) {
-                                btOut.write(buf, 0, r)
-                                btOut.flush()
-                            }
+                            if (r > 0) { btOut.write(buf, 0, r); btOut.flush() }
                         }
                     }
                 } catch (e: Exception) { break }
@@ -127,15 +111,19 @@ class RNSReceiverService : Service() {
 
     private fun injectPythonInterface() {
         serviceScope.launch {
-            val py = Python.getInstance()
-            val prefs = getSharedPreferences("radio_settings", Context.MODE_PRIVATE)
-            val json = JSONObject()
-            json.put("freq", prefs.getInt("freq", 915000000))
-            json.put("bw", prefs.getInt("bw", 125000))
-            json.put("tx", prefs.getInt("tx", 20))
-            json.put("sf", prefs.getInt("sf", 7))
-            json.put("cr", prefs.getInt("cr", 5))
-            py.getModule("rns_engine").callAttr("inject_rnode", json.toString())
+            try {
+                val py = Python.getInstance()
+                val prefs = getSharedPreferences("radio_settings", Context.MODE_PRIVATE)
+                val json = JSONObject()
+                json.put("freq", prefs.getInt("freq", 915000000))
+                json.put("bw", prefs.getInt("bw", 125000))
+                json.put("tx", prefs.getInt("tx", 20))
+                json.put("sf", prefs.getInt("sf", 7))
+                json.put("cr", prefs.getInt("cr", 5))
+                py.getModule("rns_engine").callAttr("inject_rnode", json.toString())
+            } catch (e: Exception) {
+                Log.e("RNS", "Python error", e)
+            }
         }
     }
 
@@ -143,10 +131,7 @@ class RNSReceiverService : Service() {
         super.onCreate()
         createNotificationChannel()
         startForeground(1, createNotification("Starting RNS..."))
-        
-        // FIX: Use the Database Singleton so UI and Service share ONE connection
         db = AppDatabase.getDatabase(applicationContext)
-            
         if (!Python.isStarted()) Python.start(AndroidPlatform(this))
         startRnsEngine()
     }
@@ -158,34 +143,29 @@ class RNSReceiverService : Service() {
         }
     }
 
-        fun updateLocalAddress(addr: String) {
-        localAddress.postValue(addr)
-    }
-
     fun onStatusUpdate(msg: String) {
         serviceStatus.postValue(msg)
         updateNotification(msg)
     }
 
-    // Called by Python Discovery Handler
+    fun updateLocalAddress(addr: String) {
+        localAddress.postValue(addr)
+    }
+
     fun onNodeDiscovered(hash: String, nickname: String) {
         serviceScope.launch {
-            val node = DiscoveredNode(hash, nickname, System.currentTimeMillis())
-            db.harvestDao().insertNode(node)
+            try { db.harvestDao().upsertNode(hash, nickname, System.currentTimeMillis()) } catch (e: Exception) {}
         }
     }
 
-    // Called by Python LXMF Delivery Callback
     fun onHarvestReceived(id: String, hId: String, bId: String, ripe: Int, empty: Int, lat: Double, lon: Double, ts: Long, photo: String) {
         serviceScope.launch {
-            val report = HarvestReport(id, hId, bId, ripe, empty, lat, lon, ts, photo)
-            db.harvestDao().insertReport(report) // FIX: Uses the correctly named insertReport method
+            try { db.harvestDao().insertReport(HarvestReport(id, hId, bId, ripe, empty, lat, lon, ts, photo)) } catch (e: Exception) {}
         }
     }
 
     private fun updateNotification(content: String) {
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.notify(1, createNotification(content))
+        getSystemService(NotificationManager::class.java).notify(1, createNotification(content))
     }
 
     private fun createNotification(content: String): Notification {
@@ -193,8 +173,7 @@ class RNSReceiverService : Service() {
             .setContentTitle("Palm Harvest Receiver")
             .setContentText(content)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setOngoing(true)
-            .build()
+            .setOngoing(true).build()
     }
 
     private fun createNotificationChannel() {

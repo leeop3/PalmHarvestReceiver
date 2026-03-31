@@ -32,16 +32,16 @@ class MainPagerAdapter(activity: FragmentActivity) : androidx.viewpager2.adapter
 
 class IncomingAdapter : ListAdapter<HarvestReport, IncomingAdapter.VH>(Diff()) {
     class VH(v: View) : RecyclerView.ViewHolder(v) {
-        val t: TextView = v.findViewById(R.id.txtHarvester)
-        val b: TextView = v.findViewById(R.id.txtBlock)
-        val s: TextView = v.findViewById(R.id.txtStats)
+        val t: TextView? = v.findViewById(R.id.txtHarvester)
+        val b: TextView? = v.findViewById(R.id.txtBlock)
+        val s: TextView? = v.findViewById(R.id.txtStats)
     }
     override fun onCreateViewHolder(p: ViewGroup, t: Int) = VH(LayoutInflater.from(p.context).inflate(R.layout.item_harvest, p, false))
     override fun onBindViewHolder(h: VH, p: Int) {
         val i = getItem(p); val df = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-        h.t.text = "Harvester: ${i.harvesterId}"
-        h.b.text = "Block: ${i.blockId}"
-        h.s.text = "Total: ${i.ripeBunches + i.emptyBunches} | Time: ${df.format(Date(i.timestamp * 1000))}"
+        h.t?.text = "Harvester: ${i.harvesterId}"
+        h.b?.text = "Block: ${i.blockId}"
+        h.s?.text = "Total: ${i.ripeBunches + i.emptyBunches} | Time: ${df.format(Date(i.timestamp * 1000))}"
     }
     class Diff : DiffUtil.ItemCallback<HarvestReport>() {
         override fun areItemsTheSame(o: HarvestReport, n: HarvestReport) = o.id == n.id
@@ -51,16 +51,16 @@ class IncomingAdapter : ListAdapter<HarvestReport, IncomingAdapter.VH>(Diff()) {
 
 class SummaryAdapter : ListAdapter<BlockSummary, SummaryAdapter.VH>(Diff()) {
     class VH(v: View) : RecyclerView.ViewHolder(v) {
-        val t: TextView = v.findViewById(R.id.txtHarvester)
-        val b: TextView = v.findViewById(R.id.txtBlock)
-        val s: TextView = v.findViewById(R.id.txtStats)
+        val t: TextView? = v.findViewById(R.id.txtHarvester)
+        val b: TextView? = v.findViewById(R.id.txtBlock)
+        val s: TextView? = v.findViewById(R.id.txtStats)
     }
     override fun onCreateViewHolder(p: ViewGroup, t: Int) = VH(LayoutInflater.from(p.context).inflate(R.layout.item_harvest, p, false))
     override fun onBindViewHolder(h: VH, p: Int) {
         val i = getItem(p)
-        h.t.text = "Block: ${i.blockId}"
-        h.b.text = "Total Harvest: ${i.totalBunches}"
-        h.s.text = "Ripe: ${i.totalRipe} | Empty: ${i.totalEmpty}"
+        h.t?.text = "Block: ${i.blockId}"
+        h.b?.text = "Total Harvest: ${i.totalBunches}"
+        h.s?.text = "Ripe: ${i.totalRipe} | Empty: ${i.totalEmpty}"
     }
     class Diff : DiffUtil.ItemCallback<BlockSummary>() {
         override fun areItemsTheSame(o: BlockSummary, n: BlockSummary) = o.blockId == n.blockId
@@ -72,8 +72,12 @@ class NodeAdapter(private val onLocalClick: (String) -> Unit) : RecyclerView.Ada
     private var localAddr: String = "Waiting for RNS..."
     private var nodes: List<DiscoveredNode> = emptyList()
 
-    fun setLocalAddress(addr: String) { this.localAddr = addr; notifyItemChanged(0) }
-    fun setDiscoveredNodes(newList: List<DiscoveredNode>) { this.nodes = newList; notifyDataSetChanged() }
+    fun setLocalAddress(addr: String?) { 
+        if (addr != null) { this.localAddr = addr; notifyItemChanged(0) }
+    }
+    fun setDiscoveredNodes(newList: List<DiscoveredNode>?) { 
+        if (newList != null) { this.nodes = newList; notifyDataSetChanged() }
+    }
 
     override fun getItemCount() = nodes.size + 1
     override fun getItemViewType(p: Int) = if (p == 0) 0 else 1
@@ -81,23 +85,23 @@ class NodeAdapter(private val onLocalClick: (String) -> Unit) : RecyclerView.Ada
     override fun onCreateViewHolder(p: ViewGroup, t: Int) = VH(LayoutInflater.from(p.context).inflate(R.layout.item_harvest, p, false))
     override fun onBindViewHolder(h: VH, p: Int) {
         if (p == 0) {
-            h.t.text = "THIS RECEIVER (Tap for QR)"
-            h.b.text = "Address: $localAddr"
-            h.s.text = "Config Harvesters to this address"
+            h.t?.text = "THIS RECEIVER (Tap for QR)"
+            h.b?.text = "Address: $localAddr"
+            h.s?.text = "Config Harvesters to this address"
             h.itemView.setOnClickListener { if (!localAddr.contains("Waiting")) onLocalClick(localAddr) }
         } else {
-            val i = nodes[p - 1]; val df = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-            // Use the rich data model logic from rnshello
-            h.t.text = i.label
-            h.b.text = "Address: ${i.shortAddress} | Anns: ${i.announceCount}"
-            h.s.text = "Last Heard: ${df.format(Date(i.lastSeen))}"
+            val i = nodes[p - 1]
+            val df = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+            h.t?.text = i.label
+            h.b?.text = "Address: ${i.shortAddress} | Anns: ${i.announceCount}"
+            h.s?.text = "Last Heard: ${df.format(Date(i.lastSeen))}"
             h.itemView.setOnClickListener(null)
         }
     }
     class VH(v: View) : RecyclerView.ViewHolder(v) {
-        val t: TextView = v.findViewById(R.id.txtHarvester)
-        val b: TextView = v.findViewById(R.id.txtBlock)
-        val s: TextView = v.findViewById(R.id.txtStats)
+        val t: TextView? = v.findViewById(R.id.txtHarvester)
+        val b: TextView? = v.findViewById(R.id.txtBlock)
+        val s: TextView? = v.findViewById(R.id.txtStats)
     }
 }
 
@@ -106,11 +110,11 @@ class IncomingFragment : Fragment(R.layout.fragment_incoming) {
         super.onViewCreated(view, savedInstanceState)
         val rv = view.findViewById<RecyclerView>(R.id.recyclerViewIncoming)
         val adp = IncomingAdapter()
-        rv.layoutManager = LinearLayoutManager(requireContext()); rv.adapter = adp
-        
-        // SAFEST WAY TO OBSERVE DATA IN FRAGMENTS
-        AppDatabase.getDatabase(requireContext()).harvestDao().getAllReports().observe(viewLifecycleOwner) { 
-            adp.submitList(it) 
+        rv?.layoutManager = LinearLayoutManager(requireContext())
+        rv?.adapter = adp
+        val db = AppDatabase.getDatabase(requireContext().applicationContext)
+        db.harvestDao().getAllReports().observe(viewLifecycleOwner) { data ->
+            data?.let { adp.submitList(it) }
         }
     }
 }
@@ -120,11 +124,11 @@ class SummaryFragment : Fragment(R.layout.fragment_summary) {
         super.onViewCreated(view, savedInstanceState)
         val rv = view.findViewById<RecyclerView>(R.id.recyclerViewSummary)
         val adp = SummaryAdapter()
-        rv.layoutManager = LinearLayoutManager(requireContext()); rv.adapter = adp
-        
-        // SAFEST WAY TO OBSERVE DATA IN FRAGMENTS
-        AppDatabase.getDatabase(requireContext()).harvestDao().getBlockSummaries().observe(viewLifecycleOwner) { 
-            adp.submitList(it) 
+        rv?.layoutManager = LinearLayoutManager(requireContext())
+        rv?.adapter = adp
+        val db = AppDatabase.getDatabase(requireContext().applicationContext)
+        db.harvestDao().getBlockSummaries().observe(viewLifecycleOwner) { data ->
+            data?.let { adp.submitList(it) }
         }
     }
 }
@@ -134,12 +138,15 @@ class NodesFragment : Fragment(R.layout.fragment_nodes) {
         super.onViewCreated(view, savedInstanceState)
         val rv = view.findViewById<RecyclerView>(R.id.recyclerViewNodes)
         val adp = NodeAdapter { addr -> showQr(addr) }
-        rv.layoutManager = LinearLayoutManager(requireContext()); rv.adapter = adp
+        rv?.layoutManager = LinearLayoutManager(requireContext())
+        rv?.adapter = adp
+        val db = AppDatabase.getDatabase(requireContext().applicationContext)
         
-        // SAFEST WAY TO OBSERVE DATA IN FRAGMENTS
-        RNSReceiverService.localAddress.observe(viewLifecycleOwner) { adp.setLocalAddress(it) }
-        AppDatabase.getDatabase(requireContext()).harvestDao().getAllNodes().observe(viewLifecycleOwner) { 
-            adp.setDiscoveredNodes(it) 
+        RNSReceiverService.localAddress.observe(viewLifecycleOwner) { addr ->
+            adp.setLocalAddress(addr)
+        }
+        db.harvestDao().getAllNodes().observe(viewLifecycleOwner) { data ->
+            adp.setDiscoveredNodes(data)
         }
     }
 
