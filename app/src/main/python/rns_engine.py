@@ -1,12 +1,13 @@
-import sys, os, csv, io, json, signal, warnings, shutil, traceback, platform
+import sys, os, csv, io, json, signal, warnings, shutil, traceback
 from types import ModuleType
 import importlib.util, importlib.machinery
-from datetime import datetime
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=ResourceWarning)
 
-# --- 1. THE ULTIMATE ANDROID MOCKS (LOCKED) ---
+# --- 1. THE ULTIMATE ANDROID MOCKS ---
+# We no longer lie about the Platform (no "Linux" hijack).
+# We just fake the libraries so the Android driver doesn't crash.
 class Dummy:
     def __init__(self, name="Dummy"):
         self.__name__ = name
@@ -34,11 +35,6 @@ importlib.util.find_spec = _mock_find_spec
 
 # --- 2. IMPORT RNS ---
 import RNS
-try:
-    import RNS.vendor.platformutils as pu
-    pu.is_android = lambda: False
-except: pass
-
 from LXMF import LXMRouter
 from RNS.Interfaces.Android.RNodeInterface import RNodeInterface
 from RNS.Interfaces.Interface import Interface
@@ -48,22 +44,6 @@ signal.signal = lambda sig, handler: None
 kotlin_cb = None
 local_destination = None
 
-# --- 3. SMART TIMESTAMP PARSER ---
-def parse_timestamp(ts_raw):
-    """Converts either Unix Int or YYYY-MM-DD string to Unix Long"""
-    try:
-        # Try if it's already a number (Unix Epoch)
-        return int(float(ts_raw))
-    except ValueError:
-        try:
-            # Try parsing the format seen in logs: 2026-03-19 16:17:58
-            dt = datetime.strptime(ts_raw.strip(), "%Y-%m-%d %H:%M:%S")
-            return int(dt.timestamp())
-        except Exception as e:
-            print(f"RNS-LOG: Failed to parse date {ts_raw}: {e}")
-            return int(time.time())
-
-# --- 4. DISCOVERY HANDLER ---
 class DiscoveryHandler:
     def __init__(self):
         self.aspect_filter = None 
@@ -71,13 +51,11 @@ class DiscoveryHandler:
     def received_announce(self, destination_hash, announced_identity, app_data):
         try:
             h = RNS.hexrep(destination_hash, False)
-            # Harvesters often send nickname in the app_data field of the announce
             n = app_data.decode("utf-8") if app_data else "Unknown Harvester"
-            print(f"RNS-LOG: Discovered Node {h} ({n})")
             if kotlin_cb:
                 kotlin_cb.onNodeDiscovered(h, n)
         except Exception as e:
-            print(f"RNS-LOG: Discovery callback error: {e}")
+            pass
 
 def start_engine(service_obj, storage_path, radio_params_json=None):
     global kotlin_cb, local_destination
@@ -87,6 +65,7 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
         rns_dir = os.path.join(storage_path, ".reticulum")
         lxmf_dir = os.path.join(storage_path, ".lxmf")
         
+        # Fresh start for config
         if os.path.exists(rns_dir): shutil.rmtree(rns_dir)
         os.makedirs(rns_dir)
         if not os.path.exists(lxmf_dir): os.makedirs(lxmf_dir)
@@ -104,10 +83,9 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
         local_destination = router.register_delivery_identity(local_id, display_name="PalmReceiver")
         router.register_delivery_callback(on_lxmf)
         
-        # REGISTER DISCOVERY HANDLER
         RNS.Transport.register_announce_handler(DiscoveryHandler())
         
-        addr = RNS.hexrep(local_id.hash, False)
+        addr = RNS.hexrep(local_destination.hash, False)
         service_obj.onStatusUpdate(f"RNS Online: {addr}")
         service_obj.updateLocalAddress(addr)
     except Exception as e:
@@ -117,6 +95,8 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
 def inject_rnode(radio_params_json):
     try:
         params = json.loads(radio_params_json)
+        
+        # This matches the working rnshello configuration exactly
         ictx = {
             "name": "Android RNode Bridge",
             "type": "RNodeInterface",
@@ -131,6 +111,7 @@ def inject_rnode(radio_params_json):
             "codingrate": int(params.get("cr", 5)),
             "flow_control": False
         }
+        
         ifac = RNodeInterface(RNS.Transport, ictx)
         ifac.mode = Interface.MODE_FULL
         ifac.IN = True
@@ -151,15 +132,12 @@ def on_lxmf(lxm):
             f_io = io.StringIO(content)
             reader = csv.DictReader(f_io)
             for row in reader:
-                # USE THE SMART PARSER FOR THE TIMESTAMP
-                ts = parse_timestamp(row.get('timestamp', ''))
-                
                 if kotlin_cb:
                     kotlin_cb.onHarvestReceived(
                         row['id'], row['harvester_id'], row['block_id'],
                         int(row['ripe_bunches']), int(row['empty_bunches']),
                         float(row['latitude']), float(row['longitude']),
-                        ts, row.get('photo_file', "")
+                        int(row['timestamp']), row.get('photo_file', "")
                     )
     except Exception as e:
         print(f"RNS-CRITICAL LXMF ERROR:\n{traceback.format_exc()}")
