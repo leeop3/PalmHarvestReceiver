@@ -6,7 +6,6 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=ResourceWarning)
 
 # --- 1. MOCKS (LOCKED) ---
-# We keep these to prevent USB driver crashes, but we do NOT lie about being on Linux.
 class Dummy:
     def __init__(self, name="Dummy"):
         self.__name__ = name
@@ -52,15 +51,11 @@ class MeshDiscoveryHandler:
     def received_announce(self, destination_hash, announced_identity, app_data):
         try:
             h = RNS.hexrep(destination_hash, False)
-            print(f"RNS-LOG: RAW ANNOUNCE RECEIVED FROM {h}")
-            
+            print(f"RNS-LOG: DISCOVERY EVENT -> {h}")
             n = "Unknown Harvester"
             if app_data:
-                try: 
-                    n = app_data.decode("utf-8")
-                except: 
-                    n = f"Node {h[:8]}"
-            
+                try: n = app_data.decode("utf-8")
+                except: n = f"Node {h[:8]}"
             if kotlin_cb:
                 kotlin_cb.onNodeDiscovered(h, n)
         except Exception as e:
@@ -79,18 +74,16 @@ def start_engine(service_obj, storage_path, radio_params_json=None):
         with open(os.path.join(rns_dir, "config"), "w") as f:
             f.write("[reticulum]\nenable_transport = True\nshare_instance = Yes\n\n[interfaces]\n")
         
-        # Start RNS with Debug Logging
         RNS.Reticulum(configdir=rns_dir, loglevel=RNS.LOG_DEBUG)
-        
         id_path = os.path.join(storage_path, "storage_identity")
         local_id = RNS.Identity.from_file(id_path) if os.path.exists(id_path) else RNS.Identity()
         if not os.path.exists(id_path): local_id.to_file(id_path)
         
         router = LXMRouter(identity=local_id, storagepath=lxmf_dir)
+        # FIX: The callback must match the LXMF expected signature (1 argument)
         local_destination = router.register_delivery_identity(local_id, display_name="PalmReceiver")
-        router.register_delivery_callback(lambda lxm: on_lxmf(lxm, service_obj))
+        router.register_delivery_callback(on_lxmf_received)
         
-        # Register Discovery Handler globally
         discovery_handler_inst = MeshDiscoveryHandler()
         RNS.Transport.register_announce_handler(discovery_handler_inst)
         
@@ -104,52 +97,42 @@ def inject_rnode(radio_params_json):
     try:
         params = json.loads(radio_params_json)
         import time
-        # DEFAULTS: 433MHz, 125kHz, 17TX, 8SF, 6CR
         ictx = {
-            "name": "Android RNode Bridge",
-            "type": "RNodeInterface",
-            "interface_enabled": True,
-            "outgoing": True,
-            "tcp_host": "127.0.0.1",
-            "tcp_port": 7633,
-            "frequency": int(params.get("freq", 433000000)),
-            "bandwidth": int(params.get("bw", 125000)),
-            "txpower": int(params.get("tx", 17)),
-            "spreadingfactor": int(params.get("sf", 8)),
-            "codingrate": int(params.get("cr", 6)),
-            "flow_control": False
+            "name": "Android RNode Bridge", "type": "RNodeInterface", "interface_enabled": True, "outgoing": True,
+            "tcp_host": "127.0.0.1", "tcp_port": 7633, "frequency": int(params.get("freq", 433000000)),
+            "bandwidth": int(params.get("bw", 125000)), "txpower": int(params.get("tx", 17)),
+            "spreadingfactor": int(params.get("sf", 8)), "codingrate": int(params.get("cr", 6)), "flow_control": False
         }
-        print(f"RNS-LOG: Injecting RNode {ictx['frequency']/1000000}MHz SF{ictx['spreadingfactor']}")
-        
         ifac = RNodeInterface(RNS.Transport, ictx)
         ifac.mode = Interface.MODE_FULL
-        ifac.IN = True
-        ifac.OUT = True
+        ifac.IN = True; ifac.OUT = True
         RNS.Transport.interfaces.append(ifac)
         
-        # Immediate announce to wake up the mesh
+        # Immediate announce so the sender can find a path to us
         time.sleep(2)
         if local_destination: 
             local_destination.announce()
-            print("RNS-LOG: Local announce broadcasted.")
+            print("RNS-LOG: Local announce sent to help harvesters find path.")
             
         return "RNode Active"
     except Exception as e:
-        print(f"RNS-LOG: Link Error: {e}")
         return f"Link Failed: {str(e)}"
 
-def on_lxmf(lxm, service_obj):
+# FIX: Corrected signature to handle LXMF delivery correctly
+def on_lxmf_received(lxm):
     try:
         content = lxm.content.decode("utf-8")
+        print(f"RNS-LOG: RECEIVED LXMF CONTENT -> {content[:50]}...")
         if "harvester_id" in content:
             f_io = io.StringIO(content)
             reader = csv.DictReader(f_io)
             for row in reader:
-                if service_obj:
-                    service_obj.onHarvestReceived(
+                if kotlin_cb:
+                    kotlin_cb.onHarvestReceived(
                         row.get('id', ''), row.get('harvester_id', ''), row.get('block_id', ''),
                         row.get('ripe_bunches', '0'), row.get('empty_bunches', '0'),
                         row.get('latitude', '0.0'), row.get('longitude', '0.0'),
                         row.get('timestamp', ''), row.get('photo_file', ''), content
                     )
-    except: pass
+    except Exception as e:
+        print(f"RNS-LOG: LXMF processing error: {e}")
